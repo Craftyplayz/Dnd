@@ -3,10 +3,13 @@
 // campfire, building, bridge, ruined-wall and fence.
 import { polyD, fmt, ramp, shade, jit, mix, clamp, walker, subtract, buckets, TONES, lineD, smoothD, circleD } from './_paint.js';
 
+// Rocks stay cool and neutral so warm dusk/night tints never turn them pink.
+const COOL = ['#3f4448', '#737a7f', '#aeb3b3'];
 export function stoneTones(E, stone) {
   if (stone === 'sandstone') return TONES.sandstone;
   if (stone === 'slate') return TONES.slateStone;
-  return E.pal('stone');
+  const p = E.pal('stone');
+  return [mix(p[0], COOL[0], 0.6), mix(p[1], COOL[1], 0.6), mix(p[2], COOL[2], 0.5)];
 }
 
 export function rockOutline(rng, cx, cy, rx, ry, rot = 0, n = rng.int(7, 10)) {
@@ -37,7 +40,7 @@ export function paintRock(E, rng, { cx = 0, cy = 0, rx, ry, rot = 0, tones, moss
     const l = Math.hypot(nx, ny) || 1;
     nx /= l; ny /= l;
     const lit = E.lit(nx, ny);
-    nodes.push(E.path(polyD([a, b, mid[j], mid[i]], true), { fill: ramp(T, clamp(0.3 + 0.36 * lit + rng.range(-0.06, 0.06))) }));
+    nodes.push(E.path(polyD([a, b, mid[j], mid[i]], true), { fill: ramp(T, clamp(0.28 + 0.42 * lit + rng.range(-0.05, 0.05))) }));
     nodes.push(E.path(polyD([mid[i], mid[j], inner[j], inner[i]], true), { fill: ramp(T, clamp(0.52 + 0.24 * lit + rng.range(-0.05, 0.05))) }));
     // Ridges: bright toward the light, dark away.
     if (lit > 0.25) hi.push(lineD(mid[i][0], mid[i][1], mid[j][0], mid[j][1]));
@@ -155,11 +158,11 @@ export function paintWall(E, rng, o) {
   const isOpenEnd = s => opens.some(([a, b]) => Math.abs(a - s) < 1e-6 || Math.abs(b - s) < 1e-6);
   const isEnd = s => !W.closed && (s < 1e-6 || s > L - 1e-6);
 
-  const tones = tonesIn || (material === 'brick' ? TONES.brick : material === 'plaster' ? TONES.plaster : material === 'timber' ? E.pal('wood') : E.pal('stone'));
+  const tones = tonesIn || (material === 'brick' ? TONES.brick : material === 'plaster' ? TONES.plaster : material === 'timber' ? E.pal('wood') : stoneTones(E, 'granite'));
   const P = (s, t) => { const a = W.at(s); return [a.x + a.nx * t, a.y + a.ny * t]; };
   const strokeD = kept.map(([a, b]) => polyD(W.sub(a, b))).join('');
   if (strokeD) {
-    out.shadow.push(E.shadowEl(strokeD, heightFt, { stroke: fmt(width) }));
+    out.shadow.push(E.shadowEl(strokeD, heightFt, { stroke: fmt(width), max: Math.max(width * 1.5, 1.2) }));
     out.shadow[0].setAttribute('stroke-linecap', 'butt');
     out.shadow[0].setAttribute('stroke-linejoin', join);
   }

@@ -15,13 +15,13 @@ export function lobedPts(rng, cx, cy, r, lobes = 8, depth = 0.13) {
 }
 
 export function paintFoliage(E, rng, { clumps, tones, shadowH = 2, dabs = 30, dabSize = 1, lobes = 8, depth = 0.13, under = [], rimFt = 0.25, flowers = null, contrast = 1 }) {
+  const ext = Math.max(...clumps.map(c => Math.hypot(c.x, c.y) + c.r), 1e-3);
   const shapes = clumps.map(c => ({ ...c, pts: lobedPts(rng, c.x, c.y, c.r, lobes, depth) }));
   const allD = shapes.map(s => smoothD(s.pts, true)).join('');
   const rim = shade(tones[0], -0.3);
-  const kids = [E.shadowEl(allD, shadowH, { wide: true }), ...under];
+  const kids = [E.shadowEl(allD, shadowH, { wide: true, max: Math.max(0.6, ext * 0.35) }), ...under];
   // Rim and base in one path: interior stroke parts are covered by the clump layers drawn next.
   kids.push(E.path(allD, { fill: tones[0], stroke: rim, 'stroke-width': fmt(rimFt * 2), 'stroke-linejoin': 'round' }));
-  const ext = Math.max(...shapes.map(s => Math.hypot(s.x, s.y) + s.r), 1e-3);
   const order = shapes.map((s, i) => [Math.hypot(s.x, s.y) + rng.range(0, 0.25) * s.r, i]).sort((a, b) => b[0] - a[0]).map(a => a[1]);
   const c = contrast;
   for (const i of order) {

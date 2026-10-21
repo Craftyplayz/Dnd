@@ -40,7 +40,7 @@ export default {
     B.doors = doorList(B, Array.isArray(p.doors) ? p.doors : [{ side: 's', offsetFt: 0 }]);
     const kids = [];
     const interior = B.roofKeep < 1;
-    if (B.roofKeep > 0) kids.push(E.shadowEl(polyD(B.footprint, true), STYLE[B.style].shadow, { wide: true }));
+    if (B.roofKeep > 0) kids.push(E.shadowEl(polyD(B.footprint, true), STYLE[B.style].shadow, { wide: true, max: Math.min(B.W, B.H) * 0.3 }));
     if (interior) {
       kids.push(...floorNodes(B));
       kids.push(...furnish(B));
@@ -118,6 +118,24 @@ function floorNodes(B) {
   if (floor === 'wood') {
     kids.push(E.path(polyD(inner, true), { fill: shade(dirt[0], -0.1) }));
     kids.push(...paintPlanks(E, R, { ...box, axis: B.W >= B.H ? 'x' : 'y', board: 0.9, len: [4, 10], clip: inner, missing: ruined * 0.3, bg: false }));
+  } else if (floor === 'stone' && B.round) {
+    // concentric ring paving, clipped by construction to the inner wall line
+    const st = stoneTones(E, 'granite'), T = [st[1], hsl(st[1], 0.02, 0.02, 0.05), st[2]];
+    const a = B.W / 2 - B.t / 2, b = B.H / 2 - B.t / 2, m = Math.min(a, b);
+    kids.push(E.path(polyD(inner, true), { fill: mix(shade(st[0], -0.15), dirt[0], 0.5) }));
+    const V = [0, 1, 2, 3].map(i => jit(R, ramp(T, 0.2 + i * 0.18), 0.04)), fb = buckets();
+    const P = (r, th) => [Math.cos(th) * r * (a / m), Math.sin(th) * r * (b / m)];
+    for (let r1 = m; r1 > 0.8;) {
+      const r0 = Math.max(0, r1 - R.range(1.4, 1.9)), n = Math.max(3, Math.round((2 * Math.PI * (r0 + r1) / 2) / R.range(1.6, 2.2))), ph = R.next() * 6.28;
+      for (let i = 0; i < n; i++) {
+        const t0 = ph + (i * 2 * Math.PI) / n + 0.02, t1 = ph + ((i + 1) * 2 * Math.PI) / n - 0.02;
+        const q = r0 < 0.3 ? [[0, 0], P(r1 - 0.05, t0), P(r1 - 0.05, (t0 + t1) / 2), P(r1 - 0.05, t1)] : [P(r0 + 0.05, t0), P(r1 - 0.05, t0), P(r1 - 0.05, (t0 + t1) / 2), P(r1 - 0.05, t1), P(r0 + 0.05, t1)];
+        fb.add(R.chance(ruined * 0.25) ? dirt[1] : V[R.int(0, 3)], polyD(q, true));
+      }
+      r1 = r0;
+      if (r0 === 0) break;
+    }
+    kids.push(...fb.nodes(E));
   } else if (floor === 'stone') {
     const st = stoneTones(E, 'granite'), T = [st[1], hsl(st[1], 0.02, 0.02, 0.05), st[2]];
     kids.push(E.path(polyD(inner, true), { fill: mix(shade(st[0], -0.15), dirt[0], 0.5) }));
@@ -225,14 +243,17 @@ function furnish(B) {
   };
   if (B.round && style === 'watchtower') {
     // spiral stair wedges hugging the wall
-    const a = W / 2 - t, b = H / 2 - t, n = 12, start = R.next() * Math.PI * 2, fb = buckets();
+    // stair: a narrow band of wooden treads climbing along the wall, rising (lighter) as it goes
+    const a = W / 2 - t * 0.6, b = H / 2 - t * 0.6, k = Math.max(0.6, 1 - 3 / Math.min(a, b)), start = R.next() * Math.PI * 2, n = 14, fb = buckets();
+    const steps = [];
     for (let i = 0; i < n; i++) {
-      const a0 = start + i * 0.42, a1 = a0 + 0.4;
-      const q = [[Math.cos(a0) * a, Math.sin(a0) * b], [Math.cos(a1) * a, Math.sin(a1) * b], [Math.cos(a1) * a * 0.55, Math.sin(a1) * b * 0.55], [Math.cos(a0) * a * 0.55, Math.sin(a0) * b * 0.55]];
-      fb.add(ramp(st, 0.35 + (i / n) * 0.55), polyD(q, true));
+      const a0 = start + i * 0.32, a1 = a0 + 0.3;
+      const q = [[Math.cos(a0) * a, Math.sin(a0) * b], [Math.cos(a1) * a, Math.sin(a1) * b], [Math.cos(a1) * a * k, Math.sin(a1) * b * k], [Math.cos(a0) * a * k, Math.sin(a0) * b * k]];
+      steps.push(polyD(q, true));
+      if (!(lost && i > n * (1 - ruined))) fb.add(ramp(wood, 0.3 + (i / n) * 0.6), polyD(q, true));
     }
-    kids.push(...fb.nodes(E, fill => ({ fill, stroke: shade(st[0], -0.3), 'stroke-width': 0.06 })));
-    kids.push(E.path(circleD(0, 0, Math.min(a, b) * 0.5), { fill: 'none', stroke: shade(st[0], -0.3), 'stroke-width': 0.2 }));
+    kids.push(E.shadowEl(steps.join(''), 1.2, { max: 1 }));
+    kids.push(...fb.nodes(E, fill => ({ fill, stroke: wd[0], 'stroke-width': 0.06 })));
     return kids;
   }
   if (style === 'watchtower') {
@@ -414,7 +435,7 @@ function tileFace(E, R, f, kind, T, out) {
   const uv = f.poly.map(rel);
   const u0 = Math.min(...uv.map(p => p[0])), u1 = Math.max(...uv.map(p => p[0])), v1 = Math.max(...uv.map(p => p[1]));
   const P = (u, v) => [f.r[0] + ux * u + dx * v, f.r[1] + uy * u + dy * v];
-  const rowH = kind === 'thatch' ? 1.3 : kind === 'slate' ? 0.9 : 0.8;
+  const rowH = kind === 'thatch' ? 1.3 : kind === 'slate' ? 0.9 : 3.6;
   let row = 0;
   for (let v = Math.max(0, Math.min(...uv.map(p => p[1]))); v < v1; v += rowH, row++) {
     const va = v, vb = Math.min(v + rowH, v1);
@@ -433,9 +454,10 @@ function tileFace(E, R, f, kind, T, out) {
         if (sg) (R.chance(0.5) ? out.straw : out.strawDark).push(polyD(sg));
       }
     } else {
-      const tw = kind === 'slate' ? 1.0 : 0.75;
+      // slate: small staggered tiles; wood: long boards running down the slope, overlapping in courses
+      const tw = kind === 'slate' ? 1.0 : 0.8;
       for (let u = u0 - (row % 2) * tw * 0.5; u < u1; ) {
-        const w = kind === 'wood' ? tw * R.range(0.6, 1.3) : tw;
+        const w = kind === 'wood' ? tw * R.range(0.7, 1.25) : tw;
         const q = clipPoly([P(u + 0.04, va), P(u + w - 0.04, va), P(u + w - 0.04, vb), P(u + 0.04, vb)], f.poly);
         if (q.length > 2) out.fill.add(T.v[R.int(0, 3)], polyD(q, true));
         u += w;

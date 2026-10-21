@@ -75,13 +75,17 @@ function cargoNodes(G, x0, x1, y0, y1, spill = false) {
     }
   } else if (cargo === 'hay') {
     const hay = TONES.hay;
-    const pts = blobPts(R, (x0 + x1) / 2, (y0 + y1) / 2, L / 2 * (spill ? 0.6 : 1.02), Wd / 2 * (spill ? 0.6 : 1.04), 14, 0.08);
-    kids.push(E.shadowEl(smoothD(pts, true), 0.8));
-    kids.push(E.path(smoothD(pts, true), { fill: hay[0] }));
-    kids.push(E.path(smoothD(pts.map(([x, y]) => [x * 0.85 + E.lx * 0.2 + (x0 + x1) / 2 * 0.15, y * 0.8 + E.ly * 0.2 + (y0 + y1) / 2 * 0.2]), true), { fill: hay[1] }));
+    // a heaped mound inset from the side boards so the frame stays visible
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+    const pts = blobPts(R, cx, cy, L / 2 * (spill ? 0.6 : 0.86), Wd / 2 * (spill ? 0.6 : 0.8), 14, 0.07);
+    const sc = (k, s) => pts.map(([x, y]) => [cx + (x - cx) * k + E.lx * s, cy + (y - cy) * k + E.ly * s]);
+    kids.push(E.shadowEl(smoothD(pts, true), 0.8, { max: 0.6 }));
+    kids.push(E.path(smoothD(pts, true), { fill: hay[0], stroke: shade(hay[0], -0.35), 'stroke-width': 0.08 }));
+    kids.push(E.path(smoothD(sc(0.78, Wd * 0.06), true), { fill: hay[1] }));
+    kids.push(E.path(smoothD(sc(0.45, Wd * 0.12), true), { fill: hay[2], opacity: 0.8 }));
     let d = '', d2 = '';
     for (let i = 0; i < Math.round(L * Wd * 4); i++) {
-      const x = R.range(x0 + 0.2, x1 - 0.2), y = R.range(y0 + 0.2, y1 - 0.2), a = R.next() * Math.PI, l = R.range(0.3, 0.7);
+      const x = cx + R.range(-0.4, 0.4) * L * (spill ? 0.6 : 0.85), y = cy + R.range(-0.38, 0.38) * Wd * (spill ? 0.6 : 0.8), a = R.next() * Math.PI, l = R.range(0.3, 0.7);
       const seg = lineD(x, y, x + Math.cos(a) * l, y + Math.sin(a) * l);
       if ((x - (x0 + x1) / 2) * E.lx + (y - (y0 + y1) / 2) * E.ly > 0) d2 += seg; else d += seg;
     }
@@ -153,7 +157,7 @@ function coverNodes(G, { torn = false, crumpled = false } = {}) {
   const outline = `M${fmt(x0)} ${fmt(-hw)}L${fmt(x1)} ${fmt(-hw)}Q${fmt(x1 + pucker)} 0 ${fmt(x1)} ${fmt(hw)}L${fmt(x0)} ${fmt(hw)}Q${fmt(x0 - pucker)} 0 ${fmt(x0)} ${fmt(-hw)}Z`;
   kids.push(E.path(outline, { fill: C[1], stroke: shade(C[0], -0.35), 'stroke-width': 0.08 }));
   // arch shading across the width: bright on the side toward the light, shaded on the far side
-  const lit = E.ly <= 0 ? 'n' : 's';
+  const lit = E.ly <= 0 ? 'n' : 's', s = lit === 'n' ? 1 : -1;
   const arch = E.def(`g-wagon-arch-${lit}`, () => E.h('linearGradient', { x1: 0, x2: 0, y1: lit === 'n' ? 0 : 1, y2: lit === 'n' ? 1 : 0 }, [
     E.h('stop', { offset: 0, 'stop-color': '#ffffff', 'stop-opacity': 0.1 }),
     E.h('stop', { offset: 0.28, 'stop-color': '#ffffff', 'stop-opacity': 0.35 }),
@@ -170,6 +174,14 @@ function coverNodes(G, { torn = false, crumpled = false } = {}) {
     if (i < n) { const xm = x + (x1 - x0) / n / 2; sag += lineD(xm, -hw * 0.9, xm, hw * 0.9); }
   }
   kids.push(E.path(ribs, { stroke: shade(C[0], -0.2), 'stroke-width': 0.08, fill: 'none', opacity: 0.6 }));
+  // seams along the canvas, darker hems where it drapes over the sides, a sheen along the crown
+  kids.push(E.path(lineD(x0 + 0.2, -hw * 0.5, x1 - 0.2, -hw * 0.5) + lineD(x0 + 0.2, hw * 0.5, x1 - 0.2, hw * 0.5), { stroke: C[0], 'stroke-width': 0.05, opacity: 0.5 }));
+  kids.push(E.path(lineD(x0, -hw + 0.12, x1, -hw + 0.12) + lineD(x0, hw - 0.12, x1, hw - 0.12), { stroke: shade(C[0], -0.3), 'stroke-width': 0.22, opacity: 0.45 }));
+  kids.push(E.path(lineD(x0 + 0.3, -s * hw * 0.22, x1 - 0.3, -s * hw * 0.22), { stroke: '#ffffff', 'stroke-width': fmt(hw * 0.18), opacity: 0.2, 'stroke-linecap': 'round' }));
+  // seams along the canvas, darker hems where it drapes over the sides, a sheen along the crown
+  kids.push(E.path(lineD(x0 + 0.2, -hw * 0.5, x1 - 0.2, -hw * 0.5) + lineD(x0 + 0.2, hw * 0.5, x1 - 0.2, hw * 0.5), { stroke: C[0], 'stroke-width': 0.05, opacity: 0.5 }));
+  kids.push(E.path(lineD(x0, -hw + 0.12, x1, -hw + 0.12) + lineD(x0, hw - 0.12, x1, hw - 0.12), { stroke: shade(C[0], -0.3), 'stroke-width': 0.22, opacity: 0.45 }));
+  kids.push(E.path(lineD(x0 + 0.3, -s * hw * 0.22, x1 - 0.3, -s * hw * 0.22), { stroke: '#ffffff', 'stroke-width': fmt(hw * 0.18), opacity: 0.2, 'stroke-linecap': 'round' }));
   kids.push(E.path(sag, { stroke: C[0], 'stroke-width': 0.35, fill: 'none', opacity: 0.12 }));
   if (torn) {
     const tx = rng.range(x0 + 1, x1 - 1.5), ty = rng.range(-hw * 0.4, hw * 0.2);

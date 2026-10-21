@@ -20,8 +20,8 @@ export default {
 function ropes(E, pairs) {
   const rope = mix('#7a6a50', '#000000', 0.1);
   let d = '', stakes = '';
-  for (const [a, b] of pairs) { d += lineD(a[0], a[1], b[0], b[1]); stakes += circleD(b[0], b[1], 0.1); }
-  return [E.path(d, { stroke: rope, 'stroke-width': 0.05, fill: 'none', opacity: 0.9 }), E.path(stakes, { fill: '#4a3a28' })];
+  for (const [a, b] of pairs) { d += lineD(a[0], a[1], b[0], b[1]); stakes += circleD(b[0], b[1], 0.14); }
+  return [E.shadowEl(d, 0.6, { stroke: 0.08, max: 0.5 }), E.path(d, { stroke: rope, 'stroke-width': 0.08, fill: 'none' }), E.path(stakes, { fill: '#5a4630', stroke: '#2a2016', 'stroke-width': 0.05 })];
 }
 
 function aframe(E, rng, el, T) {
@@ -40,12 +40,19 @@ function aframe(E, rng, el, T) {
     const n = Math.max(2, Math.round(W / 2));
     for (let i = 1; i < n; i++) { const x = -hx + (2 * hx * i) / n; d += lineD(x, s * 0.1, x + rng.range(-0.1, 0.1), s * (hy - sag)); }
     kids.push(E.path(d, { stroke: ramp(T, 0.25 + 0.3 * lit), 'stroke-width': 0.06, fill: 'none', opacity: 0.6 }));
-    // fold shading along the eave
-    kids.push(E.path(`M${fmt(-hx)} ${fmt(s * hy * 0.8)}Q0 ${fmt(s * (hy * 0.8 - sag * 2))} ${fmt(hx)} ${fmt(s * hy * 0.8)}`, { fill: 'none', stroke: T[0], 'stroke-width': fmt(hy * 0.12), opacity: 0.15 }));
+    // canvas falls away from the ridge: light near the ridge, darker toward the eave
+    const g = E.def(`g-tent-slope-${s > 0 ? 's' : 'n'}`, () => E.h('linearGradient', { x1: 0, x2: 0, y1: s > 0 ? 0 : 1, y2: s > 0 ? 1 : 0 }, [
+      E.h('stop', { offset: 0, 'stop-color': '#ffffff', 'stop-opacity': 0.16 }),
+      E.h('stop', { offset: 0.45, 'stop-color': '#ffffff', 'stop-opacity': 0 }),
+      E.h('stop', { offset: 1, 'stop-color': '#000000', 'stop-opacity': 0.3 }),
+    ]));
+    if (g) kids.push(E.path(eave, { fill: g }));
+    // sagging canvas between the poles: soft catenary folds
+    for (const k of [0.45, 0.75]) kids.push(E.path(`M${fmt(-hx * 0.95)} ${fmt(s * hy * k)}Q0 ${fmt(s * (hy * k + sag * 3))} ${fmt(hx * 0.95)} ${fmt(s * hy * k)}`, { fill: 'none', stroke: lit > 0 ? T[2] : T[0], 'stroke-width': fmt(hy * 0.08), opacity: 0.3 }));
   }
   // ridge pole and door flap at +x
   kids.push(E.path(lineD(-hx - 0.15, 0, hx + 0.15, 0), { stroke: shade(T[0], -0.4), 'stroke-width': 0.14 }));
-  kids.push(E.path(lineD(-hx, 0, hx, 0), { stroke: shade(T[2], 0.1), 'stroke-width': 0.05, transform: `translate(0 ${fmt(E.ly < 0 ? -0.08 : 0.08)})`, opacity: 0.7 }));
+  kids.push(E.path(lineD(-hx, 0, hx, 0), { stroke: shade(T[2], 0.2), 'stroke-width': 0.12, transform: `translate(0 ${fmt(E.ly < 0 ? -0.13 : 0.13)})`, opacity: 0.75 }));
   kids.push(E.path(polyD([[hx, 0], [hx - hy * 0.1, hy * 0.55], [hx, hy * 0.6]], true), { fill: '#1e1a14', opacity: 0.85 }));
   kids.push(E.path(polyD([[hx, 0], [hx, hy * 0.6], [hx + Math.min(W / 2 - hx, 0.5), hy * 0.45]], true), { fill: T[2], stroke: T[0], 'stroke-width': 0.04 }));
   return kids;

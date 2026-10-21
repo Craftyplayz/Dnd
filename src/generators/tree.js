@@ -1,6 +1,6 @@
 // Tree seen from above. size = canopy diameter. Species: oak, pine, birch, willow, dead.
-import { env, blobPts, smoothD, fmt, ramp, shade, jit, hsl, clamp, buckets, lensD, circleD, lineD } from './_paint.js';
-import { paintFoliage } from './_foliage.js';
+import { env, smoothD, fmt, ramp, shade, jit, hsl, mix, clamp, circleD, lineD } from './_paint.js';
+import { paintFoliage, lobedPts } from './_foliage.js';
 
 export default {
   type: 'tree',
@@ -47,12 +47,12 @@ function birch(E, rng, { R, ex, ey, shH }) {
   const base = [hsl(F[0], 0.03, -0.06, 0.05), hsl(F[1], 0.035, -0.06, 0.08), hsl(F[2], 0.03, -0.04, 0.1)];
   const tones = base.map(c => jit(rng, c, 0.05));
   const kids = [];
-  // White branches show between the airy leaf clumps.
+  // Pale bark only peeks through small gaps between the leaf clumps.
   const B = rng.fork('branches'), bark = '#d9d4c6', mark = '#3a3530';
   let d = '', dm = '';
-  const nb = B.int(4, 6), ph = B.next() * Math.PI * 2;
+  const nb = B.int(3, 4), ph = B.next() * Math.PI * 2;
   for (let i = 0; i < nb; i++) {
-    const a = ph + (i * 2 * Math.PI) / nb + B.range(-0.3, 0.3), L = R * B.range(0.4, 0.6);
+    const a = ph + (i * 2 * Math.PI) / nb + B.range(-0.3, 0.3), L = R * B.range(0.3, 0.5);
     const mx = Math.cos(a + 0.2) * L * 0.5, my = Math.sin(a + 0.2) * L * 0.5;
     d += `M0 0Q${fmt(mx * ex)} ${fmt(my * ey)} ${fmt(Math.cos(a) * L * ex)} ${fmt(Math.sin(a) * L * ey)}`;
     const t = B.range(0.3, 0.6);
@@ -60,17 +60,16 @@ function birch(E, rng, { R, ex, ey, shH }) {
   }
   const clumps = [];
   const C = rng.fork('clumps');
-  const n = C.int(13, 16);
+  const n = C.int(12, 15);
   for (let i = 0; i < n; i++) {
-    const a = C.next() * Math.PI * 2, dist = R * Math.sqrt(C.range(0.02, 1)) * 0.74, r = R * C.range(0.22, 0.29);
+    const a = C.next() * Math.PI * 2, dist = R * Math.sqrt(C.range(0.05, 1)) * 0.72, r = R * C.range(0.23, 0.3);
     clumps.push({ x: Math.cos(a) * dist * ex, y: Math.sin(a) * dist * ey, r });
   }
+  clumps.push({ x: C.range(-0.05, 0.05) * R, y: C.range(-0.05, 0.05) * R, r: R * 0.3 });
   const branches = [
-    E.shadowEl(d, shH * 0.6, { stroke: fmt(R * 0.06) }),
-    E.path(d, { fill: 'none', stroke: shade(bark, -0.25), 'stroke-width': fmt(R * 0.07), 'stroke-linecap': 'round' }),
-    E.path(d, { fill: 'none', stroke: bark, 'stroke-width': fmt(R * 0.045), 'stroke-linecap': 'round' }),
-    E.path(dm, { fill: 'none', stroke: mark, 'stroke-width': fmt(R * 0.035), 'stroke-linecap': 'round', opacity: 0.8 }),
-    E.path(circleD(0, 0, R * 0.07), { fill: bark, stroke: mark, 'stroke-width': 0.08 }),
+    E.path(d, { fill: 'none', stroke: shade(bark, -0.35), 'stroke-width': fmt(R * 0.045), 'stroke-linecap': 'round' }),
+    E.path(d, { fill: 'none', stroke: bark, 'stroke-width': fmt(R * 0.028), 'stroke-linecap': 'round' }),
+    E.path(dm, { fill: 'none', stroke: mark, 'stroke-width': fmt(R * 0.025), 'stroke-linecap': 'round', opacity: 0.7 }),
   ];
   kids.push(...paintFoliage(E, rng.fork('paint'), { clumps, tones, shadowH: shH, dabs: Math.round(R * 9), dabSize: 0.5, lobes: 7, depth: 0.12, under: branches }));
   return kids;
@@ -97,7 +96,7 @@ function pine(E, rng, { R, ex, ey, shH }) {
     tiers.push({ r, cx: E.lx * sh, cy: E.ly * sh, ...tier(r, Math.max(7, Math.round((21 - k * 3.2) * rng.range(0.9, 1.1))), E.lx * sh, E.ly * sh) });
   }
   const outD = smoothD(tiers[0].pts, true);
-  kids.push(E.shadowEl(outD, shH, { wide: true }));
+  kids.push(E.shadowEl(outD, shH, { wide: true, max: R * 0.35 }));
   const rim = shade(tones[0], -0.35);
   kids.push(E.path(outD, { fill: rim, stroke: rim, 'stroke-width': 0.4, 'stroke-linejoin': 'round' }));
   tiers.forEach((t, k) => {
@@ -131,84 +130,66 @@ function pine(E, rng, { R, ex, ey, shH }) {
 
 function willow(E, rng, { R, ex, ey, shH }) {
   const F = E.pal('foliage');
-  const base = [hsl(F[0], 0.02, -0.02, 0.02), hsl(F[1], 0.03, 0, 0.05), hsl(F[2], 0.03, 0.02, 0.08)];
-  const tones = base.map(c => jit(rng, c, 0.05));
+  const tones = [hsl(F[0], 0.02, -0.04, 0.02), hsl(F[1], 0.03, -0.04, 0.06), hsl(F[2], 0.03, -0.02, 0.1)].map(c => jit(rng, c, 0.05));
   const kids = [];
-  // frilly outline of hanging fronds
-  const n = rng.int(44, 60), out = [], ph = rng.next();
-  for (let i = 0; i < n; i++) {
-    const a = ph + (i * 2 * Math.PI) / n, r = R * (i % 2 ? rng.range(0.86, 0.93) : rng.range(0.96, 1.0));
-    out.push([Math.cos(a) * r * ex, Math.sin(a) * r * ey]);
-  }
-  const d0 = smoothD(out, true, 0.35);
-  kids.push(E.shadowEl(d0, shH, { wide: true }));
+  const S = pts => pts.map(([x, y]) => [x * ex, y * ey]);
+  // Soft rounded mound: many shallow lobes, then stacked layers toward the light.
+  const mound = lobedPts(rng, 0, 0, R, 18, 0.05);
+  const d0 = smoothD(S(mound), true);
+  kids.push(E.shadowEl(d0, shH, { wide: true, max: R * 0.35 }));
   kids.push(E.path(d0, { fill: tones[0], stroke: shade(tones[0], -0.3), 'stroke-width': 0.3 }));
-  // drooping strands radiating from the crown, curling one way
+  for (const [k, sh, t] of [[0.86, 0.06, 0.3], [0.66, 0.13, 0.52], [0.42, 0.2, 0.76]]) {
+    kids.push(E.path(smoothD(S(mound.map(([x, y]) => [x * k + E.lx * R * sh, y * k + E.ly * R * sh])), true), { fill: ramp(tones, t + rng.range(-0.03, 0.03)) }));
+  }
+  // Fine drooping streaks running out from the crown: light on the lit side, dark on the far side.
   const dirn = rng.chance(0.5) ? 1 : -1;
-  const groups = [buckets(), buckets(), buckets()];
-  const ns = Math.round(R * 13);
-  for (let i = 0; i < ns; i++) {
-    const a = rng.next() * Math.PI * 2, r0 = R * rng.range(0.05, 0.45), r1 = R * rng.range(0.75, 0.97);
-    const lit = Math.cos(a) * E.lx + Math.sin(a) * E.ly;
-    const tier = lit > 0.35 ? 2 : lit > -0.25 ? 1 : 0;
-    const b = a + dirn * rng.range(0.15, 0.3), m = (r0 + r1) / 2;
-    const c = a + dirn * rng.range(0.05, 0.12);
-    groups[tier].add(tier, `M${fmt(Math.cos(a) * r0 * ex)} ${fmt(Math.sin(a) * r0 * ey)}Q${fmt(Math.cos(c) * m * 1.05 * ex)} ${fmt(Math.sin(c) * m * 1.05 * ey)} ${fmt(Math.cos(b) * r1 * ex)} ${fmt(Math.sin(b) * r1 * ey)}`);
+  let lt = '', dk = '';
+  for (let i = 0, n = Math.round(R * 11); i < n; i++) {
+    const a = rng.next() * Math.PI * 2, r0 = R * rng.range(0.1, 0.6), r1 = Math.min(R * 1.02, r0 + R * rng.range(0.25, 0.45));
+    const b = a + dirn * rng.range(0.04, 0.12), m = (r0 + r1) / 2;
+    const seg = `M${fmt(Math.cos(a) * r0 * ex)} ${fmt(Math.sin(a) * r0 * ey)}Q${fmt(Math.cos(a) * m * ex)} ${fmt(Math.sin(a) * m * ey)} ${fmt(Math.cos(b) * r1 * ex)} ${fmt(Math.sin(b) * r1 * ey)}`;
+    if (Math.cos(a) * E.lx + Math.sin(a) * E.ly > -0.1) lt += seg; else dk += seg;
   }
-  const col = [ramp(tones, 0.35), ramp(tones, 0.62), ramp(tones, 0.92)];
-  groups.forEach((g, t) => kids.push(...g.nodes(E, () => ({ fill: 'none', stroke: col[t], 'stroke-width': fmt(R * 0.034), 'stroke-linecap': 'round', opacity: 0.9 }))));
-  // fine light strands on top
-  let d = '';
-  for (let i = 0; i < Math.round(R * 4); i++) {
-    const a = Math.atan2(E.ly, E.lx) + rng.range(-1.3, 1.3), r0 = R * rng.range(0.15, 0.4), r1 = R * rng.range(0.6, 0.9), b = a + dirn * 0.2;
-    d += `M${fmt(Math.cos(a) * r0 * ex)} ${fmt(Math.sin(a) * r0 * ey)}L${fmt(Math.cos(b) * r1 * ex)} ${fmt(Math.sin(b) * r1 * ey)}`;
-  }
-  kids.push(E.path(d, { fill: 'none', stroke: shade(tones[2], 0.12), 'stroke-width': fmt(R * 0.022), opacity: 0.7, 'stroke-linecap': 'round' }));
-  // crown
-  const cpts = blobPts(rng, E.lx * R * 0.08, E.ly * R * 0.08, R * 0.13, R * 0.13, 8, 0.18);
-  kids.push(E.path(smoothD(cpts, true), { fill: ramp(tones, 0.55) }));
-  kids.push(E.path(smoothD(cpts.map(([x, y]) => [x * 0.55 + E.lx * R * 0.08, y * 0.55 + E.ly * R * 0.08]), true), { fill: ramp(tones, 0.85), opacity: 0.9 }));
+  const w = fmt(R * 0.014);
+  if (dk) kids.push(E.path(dk, { fill: 'none', stroke: shade(tones[0], -0.2), 'stroke-width': w, opacity: 0.5, 'stroke-linecap': 'round' }));
+  if (lt) kids.push(E.path(lt, { fill: 'none', stroke: shade(tones[2], 0.1), 'stroke-width': w, opacity: 0.45, 'stroke-linecap': 'round' }));
   return kids;
 }
 
 function dead(E, rng, { R, ex, ey, shH, trunk }) {
-  const bark = E.pal('bark');
-  const tones = [hsl(bark[0], 0, -0.12, 0.03), hsl(bark[1], 0, -0.14, 0.06), hsl(bark[2], 0, -0.14, 0.08)].map(c => jit(rng, c, 0.04));
-  const byW = new Map(); // width -> path data (branches bucketed by width)
-  const add = (w, d) => { const k = fmt(Math.max(0.06, Math.round(w * 20) / 20)); byW.set(k, (byW.get(k) || '') + d); };
+  const bark = E.pal('bark'), grey = ['#36322d', '#5f584f', '#8b8377'];
+  const tones = [0, 1, 2].map(i => jit(rng, mix(bark[i], grey[i], 0.6), 0.03));
+  const byW = new Map(); // width -> path data (limbs bucketed by width)
+  const add = (w, d) => { const k = fmt(Math.max(0.07, Math.round(w * 20) / 20)); byW.set(k, (byW.get(k) || '') + d); };
   const B = rng.fork('branches');
+  // A limb continues in crooked segments; side branches split off now and then.
   const grow = (x, y, ang, len, w, depth) => {
-    const bend = B.range(-0.35, 0.35);
-    const mx = x + Math.cos(ang + bend * 0.5) * len * 0.5, my = y + Math.sin(ang + bend * 0.5) * len * 0.5;
-    let ex2 = x + Math.cos(ang + bend) * len, ey2 = y + Math.sin(ang + bend) * len;
-    const r = Math.hypot(ex2 / ex, ey2 / ey);
-    if (r > R * 0.98) { ex2 *= (R * 0.98) / r; ey2 *= (R * 0.98) / r; }
-    add(w, `M${fmt(x)} ${fmt(y)}Q${fmt(mx)} ${fmt(my)} ${fmt(ex2)} ${fmt(ey2)}`);
-    if (depth <= 0 || w < 0.08) return;
-    const kids = B.chance(0.3) ? 3 : 2;
-    for (let i = 0; i < kids; i++) {
-      const spread = (i - (kids - 1) / 2) * B.range(0.45, 0.8);
-      grow(ex2, ey2, ang + bend + spread, len * B.range(0.55, 0.72), w * 0.62, depth - 1);
-    }
+    let nx = x + Math.cos(ang) * len, ny = y + Math.sin(ang) * len;
+    const r = Math.hypot(nx / ex, ny / ey);
+    if (r > R * 0.97) { nx *= (R * 0.97) / r; ny *= (R * 0.97) / r; }
+    add(w, `M${fmt(x)} ${fmt(y)}L${fmt(nx)} ${fmt(ny)}`);
+    if (depth <= 0 || w < 0.09) return;
+    grow(nx, ny, ang + B.range(-0.35, 0.35), len * B.range(0.7, 0.85), w * 0.72, depth - 1);
+    if (B.chance(0.55)) grow(nx, ny, ang + (B.chance(0.5) ? 1 : -1) * B.range(0.5, 0.95), len * B.range(0.45, 0.65), w * 0.55, depth - 2);
   };
-  const nMain = B.int(4, 6), ph = B.next() * Math.PI * 2;
-  const tw = clamp(trunk, 0.5, R * 0.5);
+  const nMain = B.int(3, 5), ph = B.next() * Math.PI * 2;
+  const tw = clamp(trunk, 0.5, R * 0.35);
   for (let i = 0; i < nMain; i++) {
-    const a = ph + ((i + B.range(-0.2, 0.2)) * 2 * Math.PI) / nMain;
-    grow(Math.cos(a) * tw * 0.3, Math.sin(a) * tw * 0.3, a, R * B.range(0.38, 0.5), tw * B.range(0.45, 0.6), 3);
+    const a = ph + ((i + B.range(-0.3, 0.3)) * 2 * Math.PI) / nMain;
+    const reach = B.chance(0.15) ? B.range(0.35, 0.55) : B.range(0.8, 1); // some limbs snapped short
+    grow(Math.cos(a) * tw * 0.3, Math.sin(a) * tw * 0.3, a, R * 0.38 * reach, tw * B.range(0.5, 0.65), reach < 0.6 ? 1 : 4);
   }
   const all = [...byW.entries()];
   const kids = [];
-  const [dx, dy] = E.shadow(shH * 0.8);
-  const sh = all.map(([w, d]) => E.path(d, { fill: 'none', stroke: '#000', 'stroke-width': w, 'stroke-linecap': 'round' }));
-  kids.push(E.g({ transform: `translate(${fmt(dx)} ${fmt(dy)})`, opacity: E.shadowOpacity, filter: 'url(#f-shadow)' }, sh));
-  for (const [w, d] of all) kids.push(E.path(d, { fill: 'none', stroke: tones[0], 'stroke-width': fmt(Number(w) * 1.15), 'stroke-linecap': 'round' }));
-  for (const [w, d] of all) kids.push(E.path(d, { fill: 'none', stroke: tones[1], 'stroke-width': w, 'stroke-linecap': 'round' }));
-  for (const [w, d] of all) if (Number(w) > 0.15) kids.push(E.path(d, { fill: 'none', stroke: tones[2], 'stroke-width': fmt(Number(w) * 0.35), 'stroke-linecap': 'round', opacity: 0.75, transform: `translate(${fmt(E.lx * Number(w) * 0.25)} ${fmt(E.ly * Number(w) * 0.25)})` }));
-  // trunk top with growth rings / broken crown
-  kids.push(E.path(circleD(0, 0, tw * 0.55), { fill: tones[0] }));
-  kids.push(E.path(circleD(E.lx * tw * 0.06, E.ly * tw * 0.06, tw * 0.42), { fill: tones[1] }));
-  kids.push(E.path(circleD(E.lx * tw * 0.12, E.ly * tw * 0.12, tw * 0.22), { fill: tones[2], opacity: 0.8 }));
+  const [dx, dy] = E.shadow(shH * 0.8, R * 0.3);
+  kids.push(E.g({ transform: `translate(${fmt(dx)} ${fmt(dy)})`, opacity: E.shadowOpacity, filter: 'url(#f-shadow)' }, all.map(([w, d]) => E.path(d, { fill: 'none', stroke: '#000', 'stroke-width': w, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }))));
+  for (const [w, d] of all) kids.push(E.path(d, { fill: 'none', stroke: tones[0], 'stroke-width': fmt(Number(w) * 1.2 + 0.04), 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
+  for (const [w, d] of all) kids.push(E.path(d, { fill: 'none', stroke: tones[1], 'stroke-width': w, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
+  for (const [w, d] of all) if (Number(w) > 0.18) kids.push(E.path(d, { fill: 'none', stroke: tones[2], 'stroke-width': fmt(Number(w) * 0.3), 'stroke-linecap': 'round', opacity: 0.7, transform: `translate(${fmt(E.lx * Number(w) * 0.25)} ${fmt(E.ly * Number(w) * 0.25)})` }));
+  // trunk top: a broken stump with rings
+  kids.push(E.path(circleD(0, 0, tw * 0.6), { fill: tones[0] }));
+  kids.push(E.path(circleD(E.lx * tw * 0.06, E.ly * tw * 0.06, tw * 0.46), { fill: tones[1] }));
+  kids.push(E.path(circleD(E.lx * tw * 0.12, E.ly * tw * 0.12, tw * 0.25), { fill: tones[2], opacity: 0.6 }));
   return kids;
 }
 

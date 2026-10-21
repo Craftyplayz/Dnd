@@ -131,17 +131,20 @@ export function env(el, ctx = {}) {
     pal: k => pal(ctx, k),
     // -1 (facing away from the light) .. 1 (facing it) for a local unit normal.
     lit: (nx, ny) => nx * lx + ny * ly,
-    shadow(hFt) {
+    // max caps the offset length (ft) so low sun never throws a detached copy across neighbours.
+    shadow(hFt, max = Infinity) {
+      let v = null;
       if (typeof ctx.shadow === 'function') {
         const s = ctx.shadow(el, hFt);
-        if (Array.isArray(s) && Number.isFinite(s[0]) && Number.isFinite(s[1])) return s;
+        if (Array.isArray(s) && Number.isFinite(s[0]) && Number.isFinite(s[1])) v = s;
       }
-      const d = Math.min(hFt / Math.tan((elev * Math.PI) / 180), 2 * hFt);
-      return [-lx * d, -ly * d];
+      if (!v) { const d = Math.min(hFt / Math.tan((elev * Math.PI) / 180), 2 * hFt); v = [-lx * d, -ly * d]; }
+      const L = Math.hypot(v[0], v[1]);
+      return L > max ? [(v[0] * max) / L, (v[1] * max) / L] : v;
     },
     // Soft drop shadow: same silhouette, offset by the shadow vector for hFt.
-    shadowEl(d, hFt, { wide = false, stroke = null, opacity = 1 } = {}) {
-      const [dx, dy] = E.shadow(hFt);
+    shadowEl(d, hFt, { wide = false, stroke = null, opacity = 1, max = Infinity } = {}) {
+      const [dx, dy] = E.shadow(hFt, max);
       const a = { d, transform: `translate(${fmt(dx)} ${fmt(dy)})`, opacity: fmt(E.shadowOpacity * opacity), filter: `url(#${wide ? 'f-shadow-wide' : 'f-shadow'})` };
       if (stroke) Object.assign(a, { fill: 'none', stroke: '#000', 'stroke-width': stroke, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
       else a.fill = '#000';
