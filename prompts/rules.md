@@ -22,6 +22,7 @@
 - `a` is the anchor (the thing the distance is measured from), `b` is the element that is that far away. `direction` is where b lies relative to a (north, south, east, west, northeast, northwest, southeast, southwest, or any). `measure` is `edge` (default: gap between the visible edges, e.g. canopy edge, road edge, building wall) or `center` (centre to centre, only when the user clearly means centres).
 - Example: "a second wagon 20 ft west of the wreck" -> `{"id":"c-wagons","kind":"distance","a":"wagon-wreck","b":"wagon-rear","ft":20,"measure":"edge","direction":"west","text":"second wagon 20 ft west of the wreck"}`, and wagon-rear's east edge is exactly 20 ft west of wagon-wreck's west edge. Compute positions with the element sizes (a 10 x 5 wagon at x = 50 spans x 45-55). A path's edge is its centreline offset by width / 2.
 - A stated range ("15-25 ft from the road") is not exact: place things inside the range, no constraint needed.
+- A distance stated for a group ("two wagons 15 ft west of the bridge") gets ONE constraint, on the group member nearest to `a`. Place the other members beside it (side by side or in a short line, 2-5 ft apart, never overlapping) without their own constraint, so the solver cannot stack them on one spot.
 
 ### Natural variety (make it look good)
 - Natural maps need many elements: a forest edge has dozens of trees, not five. Vary tree sizes (+-30 %) and species, cluster them irregularly, leave clearings. Add bushes under and between trees, scattered boulders and rock clusters.
