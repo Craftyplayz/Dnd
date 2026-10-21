@@ -1,0 +1,43 @@
+{
+  "description": "Shared cases for both validators (src/schema.js and server.py) and both patch appliers. Each case applies ops to the named sample (after normalising it), then normalises and validates. 'patch' = expected outcome of applying ops ('ok' or 'error'); 'valid' = expected validator verdict when the patch applied.",
+  "cases": [
+    {"name":"sample unchanged","base":"riverside-ruin","ops":[],"patch":"ok","valid":true},
+    {"name":"move element by id","base":"riverside-ruin","ops":[{"op":"replace","path":"/objects/campfire/position","value":{"x":50,"y":80}}],"patch":"ok","valid":true},
+    {"name":"replace nested param","base":"forest-road-ambush","ops":[{"op":"replace","path":"/objects/wagon-rear/params/variant","value":"covered"}],"patch":"ok","valid":true},
+    {"name":"add element with dash","base":"forest-road-ambush","ops":[{"op":"add","path":"/objects/-","value":{"id":"barrel-2","type":"barrel","name":"Barrel","position":{"x":100,"y":50},"size":{"w":2.5,"h":2.5},"params":{}}}],"patch":"ok","valid":true},
+    {"name":"add point to path","base":"riverside-ruin","ops":[{"op":"add","path":"/paths/fence-south/params/points/-","value":[70,104]}],"patch":"ok","valid":true},
+    {"name":"remove element drops its constraints","base":"riverside-ruin","ops":[{"op":"remove","path":"/paths/stream"}],"patch":"ok","valid":true},
+    {"name":"remove missing id","base":"riverside-ruin","ops":[{"op":"remove","path":"/objects/nope"}],"patch":"error"},
+    {"name":"bad op","base":"riverside-ruin","ops":[{"op":"move","from":"/objects/campfire","path":"/objects/x"}],"patch":"error"},
+    {"name":"root target","base":"riverside-ruin","ops":[{"op":"replace","path":"","value":{}}],"patch":"error"},
+    {"name":"replace missing nested","base":"riverside-ruin","ops":[{"op":"replace","path":"/objects/campfire/params/nothing/deeper","value":1}],"patch":"error"},
+    {"name":"second op fails, nothing applied","base":"riverside-ruin","ops":[{"op":"replace","path":"/meta/name","value":"X"},{"op":"remove","path":"/objects/ghost"}],"patch":"error"},
+    {"name":"duplicate id","base":"forest-road-ambush","ops":[{"op":"add","path":"/objects/-","value":{"id":"tree-1","type":"barrel","name":"Barrel","position":{"x":100,"y":50},"size":{"w":2.5,"h":2.5},"params":{}}}],"patch":"ok","valid":false},
+    {"name":"unknown type","base":"forest-road-ambush","ops":[{"op":"replace","path":"/objects/tree-1/type","value":"dragon"}],"patch":"ok","valid":false},
+    {"name":"type in wrong collection","base":"forest-road-ambush","ops":[{"op":"replace","path":"/objects/tree-1/type","value":"road"}],"patch":"ok","valid":false},
+    {"name":"bad enum param","base":"forest-road-ambush","ops":[{"op":"replace","path":"/objects/tree-1/params/species","value":"palm"}],"patch":"ok","valid":false},
+    {"name":"extra params allowed","base":"forest-road-ambush","ops":[{"op":"add","path":"/objects/tree-1/params/mood","value":"gloomy"}],"patch":"ok","valid":true},
+    {"name":"unknown element field","base":"forest-road-ambush","ops":[{"op":"add","path":"/objects/tree-1/colour","value":"red"}],"patch":"ok","valid":false},
+    {"name":"position out of map","base":"forest-road-ambush","ops":[{"op":"replace","path":"/objects/tree-1/position/x","value":400}],"patch":"ok","valid":false},
+    {"name":"string where number","base":"forest-road-ambush","ops":[{"op":"replace","path":"/objects/tree-1/size/w","value":"20"}],"patch":"ok","valid":false},
+    {"name":"boolean where number","base":"forest-road-ambush","ops":[{"op":"replace","path":"/objects/tree-1/rotation","value":true}],"patch":"ok","valid":false},
+    {"name":"non-integer seed","base":"forest-road-ambush","ops":[{"op":"replace","path":"/seed","value":1.5}],"patch":"ok","valid":false},
+    {"name":"grid not multiple of 5","base":"forest-road-ambush","ops":[{"op":"replace","path":"/grid/widthFt","value":152}],"patch":"ok","valid":false},
+    {"name":"layer not allowed for type","base":"forest-road-ambush","ops":[{"op":"replace","path":"/objects/wagon-rear/layer","value":"canopy"}],"patch":"ok","valid":false},
+    {"name":"bad id pattern","base":"forest-road-ambush","ops":[{"op":"replace","path":"/objects/tree-1/id","value":"Tree 1"}],"patch":"ok","valid":false},
+    {"name":"constraint to missing element","base":"forest-road-ambush","ops":[{"op":"add","path":"/constraints/-","value":{"id":"c-x","kind":"distance","a":"tree-1","b":"ghost","ft":10}}],"patch":"ok","valid":false},
+    {"name":"region with two points","base":"riverside-ruin","ops":[{"op":"replace","path":"/regions/reeds-west/params/points","value":[[1,1],[5,5]]}],"patch":"ok","valid":false},
+    {"name":"path missing width","base":"riverside-ruin","ops":[{"op":"remove","path":"/paths/stream/params/width"}],"patch":"ok","valid":false},
+    {"name":"missing top-level key","base":"riverside-ruin","ops":[{"op":"remove","path":"/lighting"}],"patch":"ok","valid":false},
+    {"name":"change terrain","base":"riverside-ruin","ops":[{"op":"replace","path":"/terrain/base","value":"snow"}],"patch":"ok","valid":true},
+    {"name":"label text too long","base":"riverside-ruin","ops":[{"op":"replace","path":"/labels/label-tower/params/text","value":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}],"patch":"ok","valid":false},
+    {"name":"door item wrong","base":"riverside-ruin","ops":[{"op":"replace","path":"/objects/watchtower/params/doors/0/side","value":"up"}],"patch":"ok","valid":false},
+    {"name":"escaped token","base":"riverside-ruin","ops":[{"op":"add","path":"/objects/campfire/params/a~1b","value":1}],"patch":"ok","valid":true}
+  ],
+  "hash32": [
+    {"input":"","output":2166136261},
+    {"input":"tree-1","output":1883689499},
+    {"input":"wagon-wreck","output":900764056},
+    {"input":"Ünïcode-✓","output":1025022101}
+  ]
+}

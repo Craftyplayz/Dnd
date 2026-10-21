@@ -1,0 +1,446 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "battle-map-studio/scene/v1",
+  "title": "Battle Map Studio scene",
+  "description": "Single source of truth for a map. All lengths in feet. x grows east, y grows south, origin at the map's north-west corner. Rotation in degrees, clockwise. See docs/CONTRACT.md.",
+  "type": "object",
+  "required": ["meta", "grid", "terrain", "regions", "paths", "objects", "labels", "lighting", "seed", "constraints"],
+  "additionalProperties": false,
+  "properties": {
+    "meta": { "$ref": "#/$defs/meta" },
+    "grid": { "$ref": "#/$defs/grid" },
+    "terrain": { "$ref": "#/$defs/terrain" },
+    "regions": { "type": "array", "maxItems": 300, "items": { "$ref": "#/$defs/element" } },
+    "paths": { "type": "array", "maxItems": 300, "items": { "$ref": "#/$defs/element" } },
+    "objects": { "type": "array", "maxItems": 800, "items": { "$ref": "#/$defs/element" } },
+    "labels": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/element" } },
+    "lighting": { "$ref": "#/$defs/lighting" },
+    "seed": { "$ref": "#/$defs/seed" },
+    "constraints": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/constraint" } }
+  },
+  "$defs": {
+    "seed": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,47}$" },
+    "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
+    "point": {
+      "type": "object",
+      "required": ["x", "y"],
+      "additionalProperties": false,
+      "properties": {
+        "x": { "type": "number", "minimum": -10000, "maximum": 10000 },
+        "y": { "type": "number", "minimum": -10000, "maximum": 10000 }
+      }
+    },
+    "pair": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": { "type": "number", "minimum": -10000, "maximum": 10000 }
+    },
+    "size": {
+      "type": "object",
+      "required": ["w", "h"],
+      "additionalProperties": false,
+      "properties": {
+        "w": { "type": "number", "minimum": 0.1, "maximum": 2000 },
+        "h": { "type": "number", "minimum": 0.1, "maximum": 2000 }
+      }
+    },
+    "meta": {
+      "type": "object",
+      "required": ["name", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "id": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$" },
+        "description": { "type": "string", "maxLength": 4000 },
+        "version": { "const": 1 },
+        "createdAt": { "type": "string", "maxLength": 40 },
+        "updatedAt": { "type": "string", "maxLength": 40 }
+      }
+    },
+    "grid": {
+      "type": "object",
+      "required": ["cellFt", "widthFt", "heightFt", "visible"],
+      "additionalProperties": false,
+      "properties": {
+        "cellFt": { "const": 5 },
+        "widthFt": { "type": "integer", "minimum": 20, "maximum": 600 },
+        "heightFt": { "type": "integer", "minimum": 20, "maximum": 600 },
+        "visible": { "type": "boolean" },
+        "color": { "$ref": "#/$defs/color", "default": "#000000" },
+        "opacity": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.22 }
+      }
+    },
+    "terrain": {
+      "type": "object",
+      "required": ["base"],
+      "additionalProperties": false,
+      "properties": {
+        "base": { "enum": ["grass", "forest-floor", "dirt", "stone", "sand", "snow", "swamp"] },
+        "variation": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5 },
+        "tint": { "$ref": "#/$defs/color" }
+      }
+    },
+    "lighting": {
+      "type": "object",
+      "required": ["azimuth", "intensity", "time"],
+      "additionalProperties": false,
+      "properties": {
+        "azimuth": { "type": "number", "minimum": 0, "maximum": 360, "description": "Compass bearing the light comes FROM. 315 = north-west. Shadows fall the opposite way." },
+        "elevation": { "type": "number", "minimum": 5, "maximum": 90, "default": 45 },
+        "intensity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "time": { "enum": ["day", "dusk", "night"] },
+        "ambient": { "$ref": "#/$defs/color" }
+      }
+    },
+    "element": {
+      "type": "object",
+      "required": ["id", "type", "name", "layer", "position", "rotation", "size", "params", "seed"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "type": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "layer": { "enum": ["ground", "low", "objects", "canopy", "labels"] },
+        "position": { "$ref": "#/$defs/point" },
+        "rotation": { "type": "number", "minimum": -360, "maximum": 360 },
+        "size": { "$ref": "#/$defs/size" },
+        "params": { "type": "object" },
+        "seed": { "$ref": "#/$defs/seed" },
+        "locked": { "type": "boolean" },
+        "notes": { "type": "string", "maxLength": 500 }
+      }
+    },
+    "constraint": {
+      "type": "object",
+      "required": ["id", "kind", "a", "b", "ft"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "const": "distance" },
+        "a": { "$ref": "#/$defs/id" },
+        "b": { "$ref": "#/$defs/id" },
+        "ft": { "type": "number", "minimum": 0, "maximum": 2000 },
+        "measure": { "enum": ["edge", "center"], "default": "edge" },
+        "direction": { "enum": ["north", "south", "east", "west", "northeast", "northwest", "southeast", "southwest", "any"], "default": "any" },
+        "text": { "type": "string", "maxLength": 300 }
+      }
+    },
+    "points": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 500,
+      "items": { "$ref": "#/$defs/pair" }
+    }
+  },
+  "x-categories": {
+    "object": "Free-standing props and vegetation that block each other.",
+    "structure": "Buildings. Small props may sit inside; trees and wagons may not.",
+    "water": "Streams and ponds. Only bridges sit on water.",
+    "wall": "Walls, fences, cliff edges. Impassable lines.",
+    "road": "Roads. Wagons, crates, barrels and campfires may sit on them; trees, boulders, buildings, tents may not.",
+    "bridge": "Crossings over water.",
+    "ground": "Ground cover regions (dirt, mud, rubble). Never blocks.",
+    "veg": "Low vegetation regions (tall grass). Never blocks.",
+    "label": "Text labels. Never collides."
+  },
+  "x-elementTypes": {
+    "tree": {
+      "kind": "object", "layer": "canopy", "layers": ["canopy", "objects"], "cat": "object",
+      "footprint": "circle", "footprintScale": 0.45, "blockedBy": ["object", "structure", "water", "wall", "road"], "minGapFt": 0,
+      "sizeFt": { "min": [6, 6], "typical": [20, 20], "max": [40, 40] },
+      "description": "A single tree seen from above. size = canopy diameter (mature tree 15-25 ft). Gives half cover near the trunk. Trees may stand close: collision uses 45% of the canopy, so canopies can overlap a little.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "species": { "enum": ["oak", "pine", "birch", "willow", "dead"], "default": "oak" },
+          "trunkFt": { "type": "number", "minimum": 0.5, "maximum": 6, "default": 2 },
+          "heightFt": { "type": "number", "minimum": 5, "maximum": 120, "default": 40 }
+        }
+      }
+    },
+    "bush": {
+      "kind": "object", "layer": "objects", "layers": ["objects", "low"], "cat": "object",
+      "footprint": "circle", "footprintScale": 0.8, "blockedBy": ["object", "structure", "water", "wall", "road"], "minGapFt": 0,
+      "sizeFt": { "min": [2, 2], "typical": [5, 5], "max": [12, 12] },
+      "description": "Shrub or bramble, 3-8 ft across. Light obscurement, no real cover.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "species": { "enum": ["shrub", "bramble", "hedge", "flowering"], "default": "shrub" },
+          "heightFt": { "type": "number", "minimum": 1, "maximum": 10, "default": 4 }
+        }
+      }
+    },
+    "boulder": {
+      "kind": "object", "layer": "objects", "layers": ["objects"], "cat": "object",
+      "footprint": "circle", "footprintScale": 0.9, "blockedBy": ["object", "structure", "water", "wall", "road"], "minGapFt": 1,
+      "sizeFt": { "min": [2, 2], "typical": [5, 4], "max": [15, 15] },
+      "description": "One large rock, 3-10 ft. Half or three-quarters cover.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "stone": { "enum": ["granite", "sandstone", "slate", "mossy"], "default": "granite" },
+          "heightFt": { "type": "number", "minimum": 1, "maximum": 15, "default": 4 }
+        }
+      }
+    },
+    "rock-cluster": {
+      "kind": "object", "layer": "low", "layers": ["low", "objects"], "cat": "object",
+      "footprint": "circle", "footprintScale": 0.7, "blockedBy": ["object", "structure", "water", "wall", "road"], "minGapFt": 0,
+      "sizeFt": { "min": [3, 3], "typical": [8, 6], "max": [25, 25] },
+      "description": "A scatter of several small rocks across 5-20 ft. Difficult terrain, low cover.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "count": { "type": "integer", "minimum": 2, "maximum": 14, "default": 5 },
+          "stone": { "enum": ["granite", "sandstone", "slate", "mossy"], "default": "granite" }
+        }
+      }
+    },
+    "wagon": {
+      "kind": "object", "layer": "objects", "layers": ["objects"], "cat": "object",
+      "footprint": "rect", "footprintScale": 1, "blockedBy": ["object", "structure", "water", "wall"], "minGapFt": 2,
+      "sizeFt": { "min": [6, 4], "typical": [10, 5], "max": [16, 8] },
+      "description": "A wagon or cart. size.w = length along its axle-to-tongue direction (about 10 ft), size.h = width (about 5 ft). May sit on roads.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "variant": { "enum": ["covered", "open", "cart"], "default": "open" },
+          "overturned": { "type": "boolean", "default": false },
+          "broken": { "type": "boolean", "default": false },
+          "cargo": { "enum": ["none", "crates", "sacks", "hay"], "default": "none" }
+        }
+      }
+    },
+    "crate": {
+      "kind": "object", "layer": "objects", "layers": ["objects"], "cat": "object",
+      "footprint": "rect", "footprintScale": 1, "blockedBy": ["object", "water", "wall"], "minGapFt": 0,
+      "sizeFt": { "min": [1.5, 1.5], "typical": [3, 3], "max": [6, 6] },
+      "description": "Wooden crate, 2-4 ft. Can sit on roads and inside buildings.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "stack": { "type": "integer", "minimum": 1, "maximum": 3, "default": 1 },
+          "broken": { "type": "boolean", "default": false }
+        }
+      }
+    },
+    "barrel": {
+      "kind": "object", "layer": "objects", "layers": ["objects"], "cat": "object",
+      "footprint": "circle", "footprintScale": 1, "blockedBy": ["object", "water", "wall"], "minGapFt": 0,
+      "sizeFt": { "min": [1.5, 1.5], "typical": [2.5, 2.5], "max": [4, 4] },
+      "description": "Barrel seen from above, about 2.5 ft across. Can sit on roads and inside buildings.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "tipped": { "type": "boolean", "default": false }
+        }
+      }
+    },
+    "tent": {
+      "kind": "object", "layer": "objects", "layers": ["objects"], "cat": "object",
+      "footprint": "rect", "footprintScale": 1, "blockedBy": ["object", "structure", "water", "wall", "road"], "minGapFt": 3,
+      "sizeFt": { "min": [5, 5], "typical": [10, 8], "max": [30, 30] },
+      "description": "Camp tent. a-frame about 8x6 ft, round about 12 ft, pavilion up to 25 ft.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "variant": { "enum": ["a-frame", "round", "pavilion"], "default": "a-frame" },
+          "color": { "$ref": "#/$defs/color", "default": "#8a7a5a" }
+        }
+      }
+    },
+    "campfire": {
+      "kind": "object", "layer": "low", "layers": ["low", "objects"], "cat": "object",
+      "footprint": "circle", "footprintScale": 1, "blockedBy": ["object", "structure", "water", "wall"], "minGapFt": 2,
+      "sizeFt": { "min": [2, 2], "typical": [4, 4], "max": [8, 8] },
+      "description": "Fire pit with a stone ring, 3-6 ft. Lit fires cast light (20 ft bright, 40 ft dim).",
+      "params": {
+        "type": "object",
+        "properties": {
+          "lit": { "type": "boolean", "default": true },
+          "ring": { "type": "boolean", "default": true }
+        }
+      }
+    },
+    "building": {
+      "kind": "object", "layer": "objects", "layers": ["objects"], "cat": "structure",
+      "footprint": "rect", "footprintScale": 1, "blockedBy": ["structure", "water", "road", "wall"], "minGapFt": 5,
+      "sizeFt": { "min": [8, 8], "typical": [30, 20], "max": [80, 80] },
+      "description": "Building footprint shown with walls and roof or floor. Cottage about 30x20 ft, barn 40x30, watchtower about 15x15 (shape round). ruined 0 = intact roof, 1 = only wall stubs and an open floor.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "style": { "enum": ["cottage", "barn", "watchtower", "shrine", "shed"], "default": "cottage" },
+          "shape": { "enum": ["rect", "round"], "default": "rect" },
+          "roof": { "enum": ["thatch", "slate", "wood", "none"], "default": "thatch" },
+          "wall": { "enum": ["stone", "timber", "plaster"], "default": "timber" },
+          "floor": { "enum": ["wood", "stone", "dirt"], "default": "wood" },
+          "ruined": { "type": "number", "minimum": 0, "maximum": 1, "default": 0 },
+          "doors": {
+            "type": "array", "maxItems": 6, "default": [{ "side": "s", "offsetFt": 0 }],
+            "items": {
+              "type": "object", "required": ["side"], "additionalProperties": false,
+              "properties": {
+                "side": { "enum": ["n", "e", "s", "w"] },
+                "offsetFt": { "type": "number", "minimum": -100, "maximum": 100 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "bridge": {
+      "kind": "object", "layer": "low", "layers": ["low"], "cat": "bridge",
+      "footprint": "rect", "footprintScale": 1, "blockedBy": ["structure", "wall"], "minGapFt": 0,
+      "sizeFt": { "min": [6, 4], "typical": [20, 10], "max": [80, 20] },
+      "description": "Bridge over water. size.w = span length (cross the full stream width plus 2-4 ft each bank), size.h = deck width (5 ft footbridge, 10-15 ft road bridge). Rotate so w crosses the stream.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "material": { "enum": ["wood", "stone"], "default": "wood" },
+          "rails": { "type": "boolean", "default": true },
+          "broken": { "type": "boolean", "default": false }
+        }
+      }
+    },
+    "road": {
+      "kind": "path", "layer": "ground", "layers": ["ground"], "cat": "road",
+      "widthFt": { "min": 4, "typical": 12, "max": 25 },
+      "description": "Road or track along a polyline. Cart track 8-10 ft, road 10-15 ft.",
+      "params": {
+        "type": "object", "required": ["points", "width"],
+        "properties": {
+          "points": { "$ref": "#/$defs/points" },
+          "width": { "type": "number", "minimum": 2, "maximum": 40 },
+          "closed": { "type": "boolean", "default": false },
+          "surface": { "enum": ["dirt", "gravel", "cobble"], "default": "dirt" },
+          "ruts": { "type": "boolean", "default": true }
+        }
+      }
+    },
+    "stream": {
+      "kind": "path", "layer": "ground", "layers": ["ground"], "cat": "water",
+      "widthFt": { "min": 2, "typical": 8, "max": 40 },
+      "description": "Stream or river along a polyline, width = water width. Shallow streams are difficult terrain; deep ones need swimming.",
+      "params": {
+        "type": "object", "required": ["points", "width"],
+        "properties": {
+          "points": { "$ref": "#/$defs/points" },
+          "width": { "type": "number", "minimum": 1, "maximum": 80 },
+          "closed": { "type": "boolean", "default": false },
+          "depth": { "enum": ["shallow", "deep"], "default": "shallow" }
+        }
+      }
+    },
+    "ruined-wall": {
+      "kind": "path", "layer": "low", "layers": ["low", "objects"], "cat": "wall",
+      "widthFt": { "min": 0.5, "typical": 2, "max": 5 },
+      "description": "Free-standing stone wall, possibly broken. integrity 1 = continuous, 0.3 = mostly gaps. Gives half to full cover.",
+      "params": {
+        "type": "object", "required": ["points", "width"],
+        "properties": {
+          "points": { "$ref": "#/$defs/points" },
+          "width": { "type": "number", "minimum": 0.5, "maximum": 8 },
+          "closed": { "type": "boolean", "default": false },
+          "material": { "enum": ["stone", "brick"], "default": "stone" },
+          "integrity": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.6 },
+          "heightFt": { "type": "number", "minimum": 1, "maximum": 20, "default": 4 }
+        }
+      }
+    },
+    "fence": {
+      "kind": "path", "layer": "low", "layers": ["low", "objects"], "cat": "wall",
+      "widthFt": { "min": 0.3, "typical": 1, "max": 3 },
+      "description": "Fence along a polyline. Rail fence 1 ft wide.",
+      "params": {
+        "type": "object", "required": ["points", "width"],
+        "properties": {
+          "points": { "$ref": "#/$defs/points" },
+          "width": { "type": "number", "minimum": 0.3, "maximum": 4 },
+          "closed": { "type": "boolean", "default": false },
+          "style": { "enum": ["rail", "picket", "stone-low"], "default": "rail" },
+          "gaps": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.1 }
+        }
+      }
+    },
+    "cliff-edge": {
+      "kind": "path", "layer": "ground", "layers": ["ground"], "cat": "wall",
+      "widthFt": { "min": 2, "typical": 6, "max": 20 },
+      "description": "Cliff or steep drop along a polyline. width = visible rock face band. lowSide = which side of the line (walking from first to last point) is lower.",
+      "params": {
+        "type": "object", "required": ["points", "width"],
+        "properties": {
+          "points": { "$ref": "#/$defs/points" },
+          "width": { "type": "number", "minimum": 1, "maximum": 30 },
+          "closed": { "type": "boolean", "default": false },
+          "lowSide": { "enum": ["left", "right"], "default": "right" },
+          "dropFt": { "type": "number", "minimum": 2, "maximum": 200, "default": 15 }
+        }
+      }
+    },
+    "pond": {
+      "kind": "region", "layer": "ground", "layers": ["ground"], "cat": "water",
+      "description": "Pond or pool. Polygon outline of the water.",
+      "params": {
+        "type": "object", "required": ["points"],
+        "properties": {
+          "points": { "type": "array", "minItems": 3, "maxItems": 500, "items": { "$ref": "#/$defs/pair" } },
+          "depth": { "enum": ["shallow", "deep"], "default": "shallow" },
+          "reeds": { "type": "boolean", "default": true }
+        }
+      }
+    },
+    "tall-grass": {
+      "kind": "region", "layer": "low", "layers": ["low"], "cat": "veg",
+      "description": "Tall grass or meadow area. Lightly obscured, no cover.",
+      "params": {
+        "type": "object", "required": ["points"],
+        "properties": {
+          "points": { "type": "array", "minItems": 3, "maxItems": 500, "items": { "$ref": "#/$defs/pair" } },
+          "density": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.6 },
+          "heightFt": { "type": "number", "minimum": 1, "maximum": 8, "default": 3 }
+        }
+      }
+    },
+    "rubble": {
+      "kind": "region", "layer": "low", "layers": ["low"], "cat": "ground",
+      "description": "Field of broken stone and debris. Difficult terrain.",
+      "params": {
+        "type": "object", "required": ["points"],
+        "properties": {
+          "points": { "type": "array", "minItems": 3, "maxItems": 500, "items": { "$ref": "#/$defs/pair" } },
+          "density": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5 },
+          "stone": { "enum": ["granite", "sandstone", "slate", "mossy"], "default": "granite" }
+        }
+      }
+    },
+    "ground": {
+      "kind": "region", "layer": "ground", "layers": ["ground"], "cat": "ground",
+      "description": "Patch of different ground: dirt, mud, sand, gravel, stone floor, moss, or crops (a farm field). Blends softly into the base terrain.",
+      "params": {
+        "type": "object", "required": ["points", "material"],
+        "properties": {
+          "points": { "type": "array", "minItems": 3, "maxItems": 500, "items": { "$ref": "#/$defs/pair" } },
+          "material": { "enum": ["dirt", "mud", "sand", "gravel", "stone-floor", "moss", "crops", "grass"] },
+          "softness": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5 }
+        }
+      }
+    },
+    "label": {
+      "kind": "label", "layer": "labels", "layers": ["labels"], "cat": "label",
+      "description": "Text on the map. position = centre of the text. size is the approximate text box.",
+      "params": {
+        "type": "object", "required": ["text"],
+        "properties": {
+          "text": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "fontFt": { "type": "number", "minimum": 1, "maximum": 20, "default": 3 },
+          "color": { "$ref": "#/$defs/color", "default": "#ffffff" },
+          "halo": { "type": "boolean", "default": true }
+        }
+      }
+    }
+  }
+}
