@@ -115,7 +115,9 @@ JSON Schema keywords implemented (everything else is ignored): `type` (string or
 
 Semantic checks after the schema pass: grid sizes multiples of 5; ids unique across elements and constraints; `type` known and in the right collection; layer allowed; params valid against the type schema; regions ≥ 3 points; object and label `position` inside the map (inclusive; a path or region `position` is only the origin of its points and may lie outside); constraint `a`/`b` exist and differ.
 
-Never accept `NaN`/`Infinity` (Python: `json.loads(..., parse_constant=reject)`).
+Never accept `NaN`/`Infinity` (Python: `json.loads(..., parse_constant=reject)`). Reject any scene or patch value nested deeper than 64 levels (`MAX_DEPTH` in `patch.js`). Patch existence checks use own keys only (inherited names such as `constructor` never exist); `__proto__` is never a valid token.
+
+`touchedIds` is conservative: an op on a whole collection touches every element in it before and after, and an op on `/constraints/...` touches that constraint's `a` and `b` before and after.
 
 ## 4. Geometry (`src/core/geom.js`)
 

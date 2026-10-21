@@ -21,6 +21,16 @@ export function parsePath(path) {
 }
 
 const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+// Own keys only: inherited names like "constructor" never count as existing.
+const has = (c, k) => Array.isArray(c) ? typeof k === 'number' && k < c.length : Object.hasOwn(c, k);
+export const MAX_DEPTH = 64;
+export function depthOf(v, d = 0) {
+  if (d > MAX_DEPTH) return d;
+  if (v === null || typeof v !== 'object') return d;
+  let m = d + 1;
+  for (const x of Object.values(v)) { m = Math.max(m, depthOf(x, d + 1)); if (m > MAX_DEPTH) break; }
+  return m;
+}
 
 // Resolve tokens to [parent container, key]. Collection id tokens become numeric indices.
 function resolve(doc, tokens, op) {
@@ -49,7 +59,7 @@ function resolve(doc, tokens, op) {
     } else if (!isObj(node)) {
       throw new Error(`cannot descend into ${JSON.stringify(tokens.slice(0, i).join('/'))}`);
     }
-    if (i < tokens.length - 1 && (tok === '-' || node[tok] === undefined)) throw new Error(`path /${tokens.slice(0, i + 1).join('/')} does not exist`);
+    if (i < tokens.length - 1 && (tok === '-' || !has(node, tok))) throw new Error(`path /${tokens.slice(0, i + 1).join('/')} does not exist`);
     parent = node; key = tok;
   }
   return [parent, key];
@@ -66,6 +76,7 @@ export function applyPatch(scene, ops) {
       const { op, path, value } = o;
       if (!['add', 'remove', 'replace'].includes(op)) throw new Error(`unsupported op "${op}"`);
       if (op !== 'remove' && !('value' in o)) throw new Error('missing value');
+      if (depthOf(value) > MAX_DEPTH) throw new Error(`value nested deeper than ${MAX_DEPTH}`);
       const tokens = parsePath(path);
       const [parent, key] = resolve(doc, tokens, op);
       const v = structuredClone(value);
@@ -76,7 +87,7 @@ export function applyPatch(scene, ops) {
           else parent.splice(key, 0, v);
         } else parent[key] = v;
       } else {
-        if (parent[key] === undefined) throw new Error(`path ${path} does not exist`);
+        if (!has(parent, key)) throw new Error(`path ${path} does not exist`);
         if (op === 'replace') parent[key] = v;
         else if (Array.isArray(parent)) {
           const [removed] = parent.splice(key, 1);
@@ -92,15 +103,30 @@ export function applyPatch(scene, ops) {
   return doc;
 }
 
-// Element ids an op list touches (for "only edit the selection" checks).
+// Element ids an op list touches (for "only edit the selection" checks). Conservative:
+// an op on a whole collection touches every element in it (before and after), and a
+// constraint op touches the a/b elements of the constraint before and after.
 export function touchedIds(scene, ops) {
   const ids = new Set();
+  const addEl = e => { if (e && typeof e.id === 'string') ids.add(e.id); };
+  const addCon = c => { if (c && typeof c === 'object') { if (typeof c.a === 'string') ids.add(c.a); if (typeof c.b === 'string') ids.add(c.b); } };
+  const list = v => (Array.isArray(v) ? v : []);
   for (const o of ops || []) {
     let t;
-    try { t = parsePath(o.path); } catch { continue; }
-    if (!ELEMENT_COLLECTIONS.includes(t[0])) continue;
-    if (t[1] === '-' || t.length === 1) { if (o.value?.id) ids.add(o.value.id); }
-    else ids.add(t[1]);
+    try { t = parsePath(o?.path); } catch { continue; }
+    const value = o?.value;
+    if (ELEMENT_COLLECTIONS.includes(t[0])) {
+      if (t.length === 1) { list(scene[t[0]]).forEach(addEl); list(value).forEach(addEl); }
+      else if (t[1] === '-') addEl(value);
+      else ids.add(t[1]);
+    } else if (t[0] === 'constraints') {
+      if (t.length === 1) { list(scene.constraints).forEach(addCon); list(value).forEach(addCon); }
+      else {
+        if (t[1] !== '-') addCon(list(scene.constraints).find(c => c?.id === t[1]));
+        if (t.length === 2) addCon(value);
+        else if (t.length === 3 && (t[2] === 'a' || t[2] === 'b') && typeof value === 'string') ids.add(value);
+      }
+    }
   }
   return [...ids];
 }

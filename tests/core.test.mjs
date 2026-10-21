@@ -114,3 +114,21 @@ test('store.setMeta changes meta without history and survives undo', () => {
   assert.equal(store.get().meta.id, 'my-copy');
   assert.equal(store.setMeta({ id: 'Bad Id' }).ok, false);
 });
+
+test('touchedIds is conservative for collection and constraint ops (review D3)', () => {
+  const s = checkScene(load('forest-road-ambush')).scene;
+  const all = s.objects.map(o => o.id);
+  const t1 = touchedIds(s, [{ op: 'replace', path: '/objects', value: s.objects.slice(0, 2) }]);
+  assert.deepEqual(new Set(t1), new Set(all));
+  assert.deepEqual(touchedIds(s, [{ op: 'remove', path: '/constraints/c-wagons' }]).sort(), ['wagon-rear', 'wagon-wreck']);
+  assert.deepEqual(touchedIds(s, [{ op: 'replace', path: '/constraints/c-wagons/b', value: 'tree-1' }]).sort(), ['tree-1', 'wagon-rear', 'wagon-wreck']);
+  assert.deepEqual(touchedIds(s, [{ op: 'add', path: '/constraints/-', value: { id: 'c2', kind: 'distance', a: 'tree-2', b: 'tree-3', ft: 5 } }]).sort(), ['tree-2', 'tree-3']);
+});
+
+test('patch ignores inherited keys and caps nesting (review D9)', () => {
+  const s = checkScene(load('riverside-ruin')).scene;
+  assert.throws(() => applyPatch(s, [{ op: 'replace', path: '/meta/constructor', value: 1 }]));
+  assert.throws(() => applyPatch(s, [{ op: 'remove', path: '/objects/campfire/params/toString' }]));
+  let deep = 1; for (let i = 0; i < 100; i++) deep = [deep];
+  assert.throws(() => applyPatch(s, [{ op: 'add', path: '/objects/campfire/params/x', value: deep }]));
+});

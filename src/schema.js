@@ -1,6 +1,7 @@
 // Scene schema access, normalisation and validation. Mirrors server.py's validator.
 // The validator implements only the JSON Schema keywords listed in docs/CONTRACT.md section 3.
 import SCHEMA from '../schema.json' with { type: 'json' };
+import { depthOf, MAX_DEPTH } from './core/patch.js';
 
 export { SCHEMA };
 // Null-prototype so lookups like TYPES['constructor'] miss, matching Python dict semantics.
@@ -164,6 +165,7 @@ export function validateAgainst(schema, value, path = '', root = SCHEMA, errors 
 // Structural + semantic validation. Call on a normalised scene.
 // Returns { ok, errors: [{ path, message }] }.
 export function validateScene(scene) {
+  if (depthOf(scene) > MAX_DEPTH) return { ok: false, errors: [{ path: '/', message: `nested deeper than ${MAX_DEPTH} levels` }] };
   const errors = validateAgainst(SCHEMA, scene, '');
   if (errors.length || !typeOk('object', scene)) return { ok: false, errors };
   const err = (path, message) => errors.push({ path, message });
