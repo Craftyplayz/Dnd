@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -139,6 +140,90 @@ class SchemaPortTest(unittest.TestCase):
         for (name, s), expected in zip(scenes, js_ok):
             with self.subTest(name):
                 self.assertEqual(server.check_scene(s)['ok'], expected)
+
+    def test_depth_cap(self):
+        s = server.check_scene(sample('riverside-ruin'))['scene']
+        deep = 1
+        for _ in range(64):
+            deep = [deep]
+        with self.assertRaises(server.PatchError):
+            server.apply_patch(s, [{'op': 'add', 'path': '/objects/campfire/params/x', 'value': [deep]}])
+        server.apply_patch(s, [{'op': 'add', 'path': '/objects/campfire/params/x', 'value': deep}])  # exactly 64 is fine
+        nested = mutate(s, ['objects', 0, 'params', 'x'], deep)  # scene depth > 64
+        self.assertFalse(server.check_scene(nested)['ok'])
+
+    def test_proto_and_inherited_names(self):
+        s = server.check_scene(sample('riverside-ruin'))['scene']
+        for path in ('/objects/campfire/params/__proto__', '/meta/__proto__', '/__proto__'):
+            with self.assertRaises(server.PatchError):
+                server.apply_patch(s, [{'op': 'add', 'path': path, 'value': {'x': 1}}])
+        for path in ('/objects/campfire/params/constructor', '/meta/toString'):
+            with self.assertRaises(server.PatchError):
+                server.apply_patch(s, [{'op': 'replace', 'path': path, 'value': 1}])
+
+    def test_touched_ids_conservative(self):
+        s = server.check_scene(sample('forest-road-ambush'))['scene']
+        everything = {o['id'] for o in s['objects']}
+        self.assertEqual(set(server.touched_ids(s, [{'op': 'replace', 'path': '/objects', 'value': []}])), everything)
+        self.assertEqual(set(server.touched_ids(s, [{'op': 'remove', 'path': '/constraints/c-wagons'}])), {'wagon-wreck', 'wagon-rear'})
+        self.assertEqual(set(server.touched_ids(s, [{'op': 'replace', 'path': '/constraints/c-wagons/b', 'value': 'tree-1'}])),
+                         {'wagon-wreck', 'wagon-rear', 'tree-1'})
+        self.assertEqual(set(server.touched_ids(s, [{'op': 'add', 'path': '/constraints/-', 'value': {'a': 'tree-2', 'b': 'tree-3'}}])),
+                         {'tree-2', 'tree-3'})
+
+    def test_label_font_list_is_not_repeated(self):
+        s = sample('riverside-ruin')
+        s['labels'][0]['params'] = {'text': 'x' * 100000, 'fontFt': [1] * 1000}
+        t = time.time()
+        self.assertFalse(server.check_scene(s)['ok'])
+        self.assertLess(time.time() - t, 1)
+        s['labels'][0]['params'] = {'text': 'abc', 'fontFt': 'abc'}
+        self.assertFalse(server.check_scene(s)['ok'])
+        p = sample('riverside-ruin')
+        p['paths'][0]['params']['points'] = [['ab', 'cd'], ['ef', 'gh']]
+        self.assertFalse(server.check_scene(p)['ok'])
+
+    def test_patch_parity_with_js(self):
+        node = shutil.which('node')
+        if not node:
+            self.skipTest('node not installed')
+        import random
+        rng = random.Random(7)
+        base = server.check_scene(sample('forest-road-ambush'))['scene']
+        values = [None, 0, -0.0, 1.5, True, '', 'x', [], {}, [1, 2], {'x': 1, 'y': 2}, {'a': 'tree-1', 'b': 'tree-2'},
+                  base['objects'][0], {'id': 'new-1', 'type': 'crate'}, [base['objects'][1]], '__proto__', '\U0001F600' * 30]
+        paths = ['/objects/tree-1/position', '/objects/tree-1/params/constructor', '/objects/tree-1/params/__proto__',
+                 '/meta/toString', '/objects', '/objects/-', '/objects/new-x', '/objects/0', '/constraints', '/constraints/-',
+                 '/constraints/c-wagons', '/constraints/c-wagons/ft', '/constraints/c-wagons/a', '/constraints/c-wagons/b',
+                 '/paths/road/params/points/0', '/paths/road/params/points/-', '/paths/road/params/points/01', '', '/',
+                 '/x', '/objects/tree~01', '/objects/wagon-wreck', '/labels', '/regions/mud-patch', '/terrain/base', None, 5]
+        cases = []
+        for _ in range(400):
+            ops = []
+            for _ in range(rng.choice([1, 1, 2, 3])):
+                o = {'op': rng.choice(['add', 'remove', 'replace', 'move', None]), 'path': rng.choice(paths)}
+                if rng.random() < 0.85:
+                    o['value'] = rng.choice(values)
+                ops.append(o)
+            cases.append(ops)
+        cases.append(['not an op', None])
+        js = ("import {applyPatch, touchedIds} from './src/core/patch.js'; let s='';process.stdin.on('data',d=>s+=d);"
+              "process.stdin.on('end',()=>{const {base, cases}=JSON.parse(s);console.log(JSON.stringify(cases.map(ops=>{"
+              "const t=[...touchedIds(base, ops)].sort(); try { return {ok:true, doc:applyPatch(base, ops), t}; }"
+              " catch (e) { return {ok:false, t}; }})))});")
+        res = subprocess.run([node, '--input-type=module', '-e', js], cwd=ROOT, capture_output=True, text=True,
+                             input=json.dumps({'base': base, 'cases': cases}), check=True, encoding='utf-8')
+        out = json.loads(res.stdout)
+        for ops, j in zip(cases, out):
+            with self.subTest(ops=json.dumps(ops)[:200]):
+                self.assertEqual(sorted(server.touched_ids(base, ops)), j['t'])
+                try:
+                    doc = server.apply_patch(base, ops)
+                except server.PatchError:
+                    self.assertFalse(j['ok'])
+                    continue
+                self.assertTrue(j['ok'])
+                self.assertEqual(json.loads(json.dumps(doc)), j['doc'])
 
 
 if __name__ == '__main__':

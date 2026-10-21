@@ -337,7 +337,9 @@ Python stdlib only (`http.server.ThreadingHTTPServer`, `urllib.request`, `hmac`,
 | `unsupported_media_type` | 415 |
 | `rate_limited`, `daily_cap`, `locked_out` | 429 |
 | `llm_invalid` (output failed validation twice), `llm_refusal`, `llm_error` (upstream error/timeout) | 502 |
-| `llm_not_configured` (no `ANTHROPIC_API_KEY`) | 503 |
+| `llm_not_configured` (no `ANTHROPIC_API_KEY`), `busy` (connection limit) | 503 |
+| `method_not_allowed` | 405 |
+| `too_many_scenes` | 409 |
 | `internal` | 500 |
 
 ### 12.2 Auth
@@ -394,7 +396,7 @@ System prompts live in `prompts/generate.md` and `prompts/edit.md` and contain t
 
 Docker: multi-stage on `python:3.12-slim`; build stage runs `build.py`; final image holds only `server.py`, `config.json`, `schema.json`, `prompts/`, `dist/`; non-root user; `ENV DATA_DIR=/data`; `VOLUME /data`; `EXPOSE 8080`; `HEALTHCHECK` hitting `/healthz` with Python urllib. Compose: build `.`, `ports: "${HOST_PORT:-8080}:8080"`, `env_file: .env`, named volume `bms-data:/data`, `restart: unless-stopped`, healthcheck.
 
-Environment (`.env.example`): `APP_PASSWORD`, `ANTHROPIC_API_KEY`, `CLAUDE_MODEL`, `PORT=8080`, `DATA_DIR` (default `./data`, `/data` in Docker), `SESSION_SECRET`, `COOKIE_SECURE=0`, `TRUSTED_PROXY=0`, `RATE_LIMIT_PER_MIN=20`, `DAILY_REQUEST_CAP=300`, `MAX_BODY_BYTES=2097152`, `LOGIN_MAX_FAILS=5`, `LOGIN_LOCKOUT_MIN=15`, `ANTHROPIC_API_URL` (tests only).
+Environment (`.env.example`): `APP_PASSWORD`, `ANTHROPIC_API_KEY`, `CLAUDE_MODEL`, `PORT=8080`, `DATA_DIR` (default `./data`, `/data` in Docker), `SESSION_SECRET`, `COOKIE_SECURE=0`, `TRUSTED_PROXY=0`, `RATE_LIMIT_PER_MIN=20`, `DAILY_REQUEST_CAP=300`, `MAX_BODY_BYTES=2097152`, `LOGIN_MAX_FAILS=5`, `LOGIN_LOCKOUT_MIN=15`, `REQUEST_TIMEOUT_SEC=30`, `MAX_CONNECTIONS=64`, `ANTHROPIC_API_URL` (tests only).
 
 `server.py` serves `dist/index.html` for `GET /` and `GET /index.html`; if `dist/index.html` is missing it says "run python build.py".
 

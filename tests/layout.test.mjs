@@ -75,7 +75,7 @@ test('center measure and direction any; ft 0 touching', () => {
   assert.ok(Math.abs(distanceFt(el(scene, 'a'), el(scene, 'b'), 'center') - 25) <= 0.01);
   assert.ok(Math.abs(distanceFt(el(scene, 'c'), el(scene, 'd')) - 0) <= 0.01);
   assert.ok(el(scene, 'd').position.y < el(scene, 'c').position.y);
-  assert.equal(el(scene, 'd').position.x, 81);
+  assert.equal(el(scene, 'd').position.x, 80); // aligned on the line north of c
   assert.equal(overlaps(footprintOf(el(scene, 'c')), footprintOf(el(scene, 'd'))), false); // touching, not inside
   assert.ok(report.ok, JSON.stringify(errors(report)));
 });
@@ -219,4 +219,63 @@ test('moving a path b west keeps the scene valid (QA D1)', () => {
   const res = validate(scene);
   assert.ok(res.ok, JSON.stringify(res.errors));
   assert.ok(Math.abs(distanceFt(findElement(scene, 'watchtower').el, findElement(scene, 'stream').el) - 30) <= 0.05);
+});
+
+test('D1: a constraint that pushes b off the map is reported and the result stays valid', () => {
+  const s = blank({ grid: { cellFt: 5, widthFt: 120, heightFt: 120, visible: true },
+    objects: [obj('wagon', 'wagon', 100, 60, 10, 5), obj('crate', 'crate', 60, 60, 3, 3)],
+    constraints: [{ id: 'c1', kind: 'distance', a: 'wagon', b: 'crate', ft: 30, direction: 'east' }] });
+  const { scene, report } = layoutScene(s);
+  assert.ok(validate(scene).ok, JSON.stringify(validate(scene).errors));
+  const c = el(scene, 'crate');
+  assert.ok(c.position.x + 1.5 <= 120 + 1e-9, `crate at ${c.position.x}`);
+  assert.equal(report.ok, false);
+  assert.equal(kinds(report, 'constraint')[0].level, 'error');
+});
+
+test('D1: layoutScene never returns a scene that fails checkScene', () => {
+  // label pushed far east by a constraint: labels are not clamped, so the result would be invalid
+  const s = blank({ objects: [obj('rock', 'boulder', 90, 50, 4, 4)],
+    labels: [{ id: 'lbl', type: 'label', name: 'L', position: { x: 50, y: 50 }, params: { text: 'Here' } }],
+    constraints: [{ id: 'c1', kind: 'distance', a: 'rock', b: 'lbl', ft: 40, direction: 'east', measure: 'center' }] });
+  const { scene, report } = layoutScene(s);
+  assert.ok(validate(scene).ok);
+  assert.equal(report.ok, false);
+  assert.deepEqual(el(scene, 'lbl').position, { x: 50, y: 50 }); // input kept
+  assert.ok(report.items.some(i => i.level === 'error' && /unchanged/.test(i.message)));
+});
+
+test('D2: stated direction puts b on the line through a; chains converge; over-constraint flagged', () => {
+  const s = blank({
+    objects: [obj('a', 'boulder', 20, 20, 4, 4), obj('b', 'boulder', 45, 31, 4, 4), obj('c', 'crate', 70, 70, 3, 3)],
+    constraints: [
+      { id: 'c2', kind: 'distance', a: 'b', b: 'c', ft: 15, direction: 'south' }, // chain: listed before b is placed
+      { id: 'c1', kind: 'distance', a: 'a', b: 'b', ft: 20, direction: 'east' },
+    ],
+  });
+  const { scene, report } = layoutScene(s);
+  const [A, B, C] = ['a', 'b', 'c'].map(id => el(scene, id));
+  assert.equal(B.position.y, 20);
+  assert.equal(C.position.x, B.position.x);
+  assert.ok(Math.abs(distanceFt(A, B) - 20) <= 0.01 && Math.abs(distanceFt(B, C) - 15) <= 0.01);
+  assert.ok(report.ok, JSON.stringify(errors(report)));
+  assert.equal(report.moved.filter(m => m.id === 'b').length, 1);
+  // b in two compatible constraints (west of x, north of y) converges
+  const two = blank({
+    objects: [obj('x', 'boulder', 60, 40, 4, 4), obj('y', 'boulder', 50, 70, 4, 4), obj('b', 'crate', 30, 30, 2, 2)],
+    constraints: [{ id: 'k1', kind: 'distance', a: 'x', b: 'b', ft: 10, direction: 'west', measure: 'center' },
+      { id: 'k2', kind: 'distance', a: 'y', b: 'b', ft: 30, direction: 'north', measure: 'center' }],
+  });
+  const t = layoutScene(two);
+  assert.ok(t.report.ok, JSON.stringify(errors(t.report)));
+  assert.deepEqual(el(t.scene, 'b').position, { x: 50, y: 40 });
+  // impossible: b 10 ft east and 10 ft west of the same anchor
+  const bad = blank({
+    objects: [obj('x', 'boulder', 50, 50, 4, 4), obj('b', 'crate', 30, 30, 2, 2)],
+    constraints: [{ id: 'k1', kind: 'distance', a: 'x', b: 'b', ft: 10, direction: 'west' },
+      { id: 'k2', kind: 'distance', a: 'x', b: 'b', ft: 10, direction: 'east' }],
+  });
+  const r = layoutScene(bad).report;
+  assert.ok(r.items.some(i => i.kind === 'constraint' && /over-constrained/.test(i.message)));
+  assert.equal(JSON.stringify(layoutScene(bad)), JSON.stringify(layoutScene(bad))); // deterministic
 });

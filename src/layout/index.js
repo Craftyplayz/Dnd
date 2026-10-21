@@ -1,10 +1,11 @@
 // Layout engine: exact stated distances, collision resolution, distance/sanity report.
 // Pure and deterministic. See docs/CONTRACT.md section 9. All distance math comes from geom.js.
-import { TYPES, normalizeScene, allElements, findElement } from '../schema.js';
+import { TYPES, normalizeScene, allElements, findElement, checkScene as validateScene } from '../schema.js';
 import { shapeOf, footprintOf, distanceFt, overlaps, gap, coreDistance, pointInPoly, boundsOf, DIRECTIONS } from '../core/geom.js';
 
 const CONSTRAINT_TOL = 0.05;   // report tolerance (contract 2.3)
 const SOLVE_TOL = 0.01;        // solver target
+const RELAX_PASSES = 6;        // passes over all constraints so chains converge
 const SPIRAL_STEP = 2.5;
 const SPIRAL_MAX = 30;
 const CELL = 5;
@@ -66,10 +67,18 @@ function clampToMap(scene, fps, moved) {
 
 // Move b along the constraint direction until distanceFt(a, b) == ft (bisection on the move distance).
 // Picks the root nearest to the current position that keeps b on the stated side of a.
-function solveConstraint(scene, c, fps, moved) {
+// align: for a stated direction, first put an object/label b on the line through a's centre along it
+// ("20 ft west" means west, not north-west); paths and regions keep their offset (their centre is not meaningful).
+function solveConstraint(scene, c, fps, align) {
   const A = findElement(scene, c.a)?.el, B = findElement(scene, c.b)?.el;
   if (!A || !B || B.locked) return;
   let d = DIRECTIONS[c.direction];
+  if (d && align && (def(B).kind === 'object' || def(B).kind === 'label')) {
+    const [ax, ay] = centerOf(A), [bx, by] = centerOf(B);
+    const along = (bx - ax) * d[0] + (by - ay) * d[1];
+    const px = ax + d[0] * along - bx, py = ay + d[1] * along - by;
+    if (Math.hypot(px, py) > 1e-6) { B.position = { x: B.position.x + px, y: B.position.y + py }; fps.forget(B); }
+  }
   if (!d) {
     const [ax, ay] = centerOf(A), [bx, by] = centerOf(B);
     const len = Math.hypot(bx - ax, by - ay);
@@ -78,9 +87,10 @@ function solveConstraint(scene, c, fps, moved) {
   const { x: x0, y: y0 } = B.position;
   const at = t => moveTo(B, x0 + d[0] * t, y0 + d[1] * t);
   const f = t => distanceFt(A, at(t), c.measure) - c.ft;
-  if (Math.abs(f(0)) <= SOLVE_TOL) return;
   const [ax, ay] = centerOf(A);
   const rightSide = t => { const [bx, by] = centerOf(at(t)); return (bx - ax) * d[0] + (by - ay) * d[1] >= -1e-9; };
+  const pointLike = def(B).kind === 'object' || def(B).kind === 'label';
+  if (Math.abs(f(0)) <= SOLVE_TOL && (!pointLike || !DIRECTIONS[c.direction] || rightSide(0))) return;
   // Converge on the boundary and return its positive side, so ft = 0 ends touching rather than overlapping.
   const bisect = (lo, hi) => {
     const posLo = f(lo) > 0;
@@ -107,13 +117,39 @@ function solveConstraint(scene, c, fps, moved) {
   }
   const t = found ?? fallback;
   if (t === null) return;
-  const from = { ...B.position };
   B.position = { x: r3(x0 + d[0] * t), y: r3(y0 + d[1] * t) };
   if (Math.abs(distanceFt(A, B, c.measure) - c.ft) > SOLVE_TOL) {
     B.position = { x: x0 + d[0] * t, y: y0 + d[1] * t }; // rounding broke it: keep the exact value
   }
   fps.forget(B);
-  moved.push({ id: B.id, from, to: { ...B.position }, reason: `constraint ${c.id}` });
+}
+
+const satisfied = (scene, c) => {
+  const A = findElement(scene, c.a)?.el, B = findElement(scene, c.b)?.el;
+  return !!A && !!B && Math.abs(distanceFt(A, B, c.measure) - c.ft) <= SOLVE_TOL;
+};
+
+// Relaxation: repeat passes so chains (b of one is a of another) settle. Returns report items for
+// elements that are b of several constraints that could not all be met (over-constrained).
+function solveConstraints(scene, fps, moved) {
+  const asB = new Map();
+  for (const c of scene.constraints) asB.set(c.b, [...(asB.get(c.b) || []), c]);
+  const start = new Map([...asB.keys()].map(id => [id, findElement(scene, id)?.el]).filter(([, e]) => e).map(([id, e]) => [id, { ...e.position }]));
+  for (let pass = 0; pass < RELAX_PASSES; pass++) {
+    for (const c of scene.constraints) solveConstraint(scene, c, fps, asB.get(c.b).length === 1);
+    if (scene.constraints.every(c => satisfied(scene, c))) break;
+  }
+  for (const [id, from] of start) {
+    const to = findElement(scene, id).el.position;
+    if (to.x !== from.x || to.y !== from.y) moved.push({ id, from, to: { ...to }, reason: `constraint ${asB.get(id).map(c => c.id).join(',')}` });
+  }
+  const items = [];
+  for (const [id, cs] of asB) {
+    if (cs.length < 2 || cs.every(c => satisfied(scene, c))) continue;
+    const el = findElement(scene, id)?.el;
+    items.push({ level: 'error', kind: 'constraint', ids: [id, ...cs.map(c => c.a)], message: `${el ? nameOf(el) : id} is over-constrained: ${cs.map(c => c.text || c.id).join('; ')} cannot all hold` });
+  }
+  return items;
 }
 
 const SPIRAL = (() => {
@@ -318,9 +354,9 @@ function coverPct(scene, grid) {
   return open ? r1((100 * covered) / open) : 0;
 }
 
-function buildReport(scene, fps, moved) {
+function buildReport(scene, fps, moved, extra = []) {
   const all = allElements(scene);
-  const items = [...constraintItems(scene), ...pairItems(all, fps), ...boundsAndSizeItems(scene, fps), ...bridgeItems(scene, fps)];
+  const items = [...constraintItems(scene), ...extra, ...pairItems(all, fps), ...boundsAndSizeItems(scene, fps), ...bridgeItems(scene, fps)];
   const grid = blockedGrid(scene, fps);
   const lanes = { westEast: hasRoute(grid, true), northSouth: hasRoute(grid, false) };
   items.push(lanes.westEast
@@ -340,12 +376,21 @@ export function layoutScene(input, { fix = true } = {}) {
   const scene = normalizeScene(input);
   const fps = footprints();
   const moved = [];
-  if (fix) {
-    clampToMap(scene, fps, moved);
-    for (const c of scene.constraints) solveConstraint(scene, c, fps, moved);
-    resolveCollisions(scene, fps, moved);
+  if (!fix) return { scene, report: buildReport(scene, fps, moved) };
+  clampToMap(scene, fps, moved);
+  const extra = solveConstraints(scene, fps, moved);
+  clampToMap(scene, fps, moved); // a solved b may have left the map; the broken constraint is then reported
+  resolveCollisions(scene, fps, moved);
+  const report = buildReport(scene, fps, moved, extra);
+  // Never hand back a scene the validator rejects: keep the input instead and say why.
+  const check = validateScene(scene);
+  if (!check.ok && validateScene(input).ok) {
+    const kept = layoutScene(input, { fix: false });
+    kept.report.items.push({ level: 'error', kind: 'bounds', ids: [], message: `Layout left the scene unchanged: its result was invalid (${check.errors[0]?.path}: ${check.errors[0]?.message})` });
+    kept.report.ok = false;
+    return kept;
   }
-  return { scene, report: buildReport(scene, fps, moved) };
+  return { scene, report };
 }
 
 export function checkScene(scene) {

@@ -51,6 +51,7 @@ Run `python build.py` again after changing anything in `src/`.
 | `DAILY_REQUEST_CAP` | `300` | AI requests per UTC day across all users; persisted across restarts |
 | `MAX_BODY_BYTES` | `2097152` | Largest accepted request body |
 | `LOGIN_MAX_FAILS` / `LOGIN_LOCKOUT_MIN` | `5` / `15` | Failed logins from one IP before a lockout, and its length |
+| `REQUEST_TIMEOUT_SEC` / `MAX_CONNECTIONS` | `30` / `64` | Idle timeout per connection, and the most concurrent connections (extra ones get 503) |
 
 Per-token prices for the usage indicator are in `config.json` (`pricing`). Every AI request's token usage is appended to `DATA_DIR/usage.log`.
 

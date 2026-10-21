@@ -10,11 +10,13 @@ import copy
 import datetime
 import hashlib
 import hmac
+import http.client
 import json
 import math
 import os
 import re
 import secrets
+import signal
 import sys
 import tempfile
 import threading
@@ -268,8 +270,11 @@ def normalize_element(el, scene_seed=0):
     for k, s in d.get('params', {}).get('properties', {}).items():
         if k not in params and 'default' in s:
             params[k] = copy.deepcopy(s['default'])
+    # Arithmetic only on real numbers: Python would repeat a list or string where JS coerces. Such input
+    # fails validation either way; skipping the derived size keeps the verdict the same.
     pts = params.get('points')
-    if d['kind'] in ('path', 'region') and isinstance(pts, list) and pts:
+    if d['kind'] in ('path', 'region') and isinstance(pts, list) and pts and all(
+            isinstance(p, list) and len(p) >= 2 and _is_num(p[0]) and _is_num(p[1]) for p in pts):
         w = params.get('width')
         pad = (w if _is_num(w) else 0) if d['kind'] == 'path' else 0
         xs = [p[0] for p in pts]
@@ -278,7 +283,8 @@ def normalize_element(el, scene_seed=0):
     if d['kind'] == 'label' and isinstance(params.get('text'), str):
         f = params.get('fontFt')
         f = 3 if f is None else f
-        el['size'] = {'w': max(0.1, _r2(_js_len(params['text']) * f * 0.55)), 'h': _r2(f * 1.2)}
+        if _is_num(f):
+            el['size'] = {'w': max(0.1, _r2(_js_len(params['text']) * f * 0.55)), 'h': _r2(f * 1.2)}
     return el
 
 
@@ -313,6 +319,8 @@ def normalize_scene(inp):
 
 
 def validate_scene(scene):
+    if depth_of(scene) > MAX_DEPTH:
+        return {'ok': False, 'errors': [{'path': '/', 'message': f'nested deeper than {MAX_DEPTH} levels'}]}
     errors = validate_against(SCHEMA, scene, '')
     if errors or not isinstance(scene, dict):
         return {'ok': False, 'errors': errors}
@@ -376,6 +384,21 @@ class PatchError(Exception):
         self.op_index = op_index
 
 
+MAX_DEPTH = 64
+
+
+def depth_of(v, d=0):
+    """Nesting depth like patch.js depthOf (primitive 0, {} 1); stops counting past MAX_DEPTH."""
+    if d > MAX_DEPTH or not isinstance(v, (dict, list)):
+        return d
+    m = d + 1
+    for x in (v.values() if isinstance(v, dict) else v):
+        m = max(m, depth_of(x, d + 1))
+        if m > MAX_DEPTH:
+            break
+    return m
+
+
 def parse_path(path):
     if not isinstance(path, str) or not path.startswith('/'):
         raise ValueError('path must start with "/"')
@@ -391,9 +414,30 @@ def _exists(node, tok):
     return tok in node
 
 
+def _js_truthy(v):
+    if v is None or v is False:
+        return False
+    if isinstance(v, str):
+        return v != ''
+    if _is_num(v):
+        return v != 0
+    return True
+
+
+def _strict_eq(a, b):
+    """JS === on JSON values: containers compare by identity (never equal after a copy)."""
+    if isinstance(a, (dict, list)) or isinstance(b, (dict, list)):
+        return False
+    if isinstance(a, bool) or isinstance(b, bool):
+        return a is b
+    return a == b
+
+
 def _resolve(doc, tokens, op):
     if not tokens or tokens[0] == '':
         raise ValueError('cannot target the scene root')
+    if '__proto__' in tokens:
+        raise ValueError('"__proto__" is not a valid key')
     if tokens[0] not in doc:
         raise ValueError(f'unknown top-level key "{tokens[0]}"')
     parent, key = doc, tokens[0]
@@ -401,13 +445,13 @@ def _resolve(doc, tokens, op):
         node = parent[key]
         tok = tokens[i]
         if i == 1 and tokens[0] in ID_COLLECTIONS:
-            if not isinstance(node, list):
-                raise ValueError(f'{tokens[0]} is not an array')
             if tok == '-':
                 if len(tokens) != 2 or op != 'add':
                     raise ValueError('"-" is only valid for add of a whole element')
             else:
-                idx = next((j for j, e in enumerate(node) if isinstance(e, dict) and e.get('id') == tok), -1)
+                if not isinstance(node, list):
+                    raise ValueError(f'{tokens[0]} is not an array')
+                idx = next((j for j, e in enumerate(node) if isinstance(e, dict) and _strict_eq(e.get('id'), tok)), -1)
                 if idx < 0:
                     if op == 'add' and len(tokens) == 2:
                         tok = '-'  # add by explicit id == append
@@ -442,6 +486,8 @@ def apply_patch(scene, ops):
                 raise ValueError(f'unsupported op "{op}"')
             if op != 'remove' and 'value' not in o:
                 raise ValueError('missing value')
+            if depth_of(o.get('value')) > MAX_DEPTH:
+                raise ValueError(f'value nested deeper than {MAX_DEPTH}')
             tokens = parse_path(o.get('path'))
             parent, key = _resolve(doc, tokens, op)
             v = copy.deepcopy(o.get('value'))
@@ -462,10 +508,14 @@ def apply_patch(scene, ops):
                     parent[key] = v
                 elif isinstance(parent, list):
                     removed = parent.pop(key)
-                    if len(tokens) == 2 and tokens[0] in ELEMENT_COLLECTIONS and isinstance(removed, dict) and removed.get('id'):
-                        rid = removed['id']
-                        doc['constraints'] = [c for c in (doc.get('constraints') or [])
-                                              if not (isinstance(c, dict) and (c.get('a') == rid or c.get('b') == rid))]
+                    if len(tokens) == 2 and tokens[0] in ELEMENT_COLLECTIONS and isinstance(removed, dict) and _js_truthy(removed.get('id')):
+                        rid, cons = removed['id'], doc.get('constraints')
+                        if not _js_truthy(cons):
+                            cons = []
+                        if not isinstance(cons, list) or any(c is None for c in cons):
+                            raise ValueError('constraints is not a list of objects')
+                        doc['constraints'] = [c for c in cons if not (isinstance(c, dict) and (
+                            _strict_eq(c.get('a'), rid) or _strict_eq(c.get('b'), rid)))]
                 else:
                     del parent[key]
         except PatchError:
@@ -476,20 +526,49 @@ def apply_patch(scene, ops):
 
 
 def touched_ids(scene, ops):
+    """Element ids an op list touches. Conservative, mirrors patch.js touchedIds: an op on a whole
+    collection touches every element in it before and after; a constraint op touches its a/b before and after."""
     ids = {}
+
+    def add_el(e):
+        if isinstance(e, dict) and isinstance(e.get('id'), str):
+            ids[e['id']] = True
+
+    def add_con(c):
+        if isinstance(c, dict):
+            for k in ('a', 'b'):
+                if isinstance(c.get(k), str):
+                    ids[c[k]] = True
+
+    def lst(v):
+        return v if isinstance(v, list) else []
+
     for o in ops if isinstance(ops, list) else []:
+        o = o if isinstance(o, dict) else {}
         try:
-            t = parse_path(o.get('path') if isinstance(o, dict) else None)
+            t = parse_path(o.get('path'))
         except ValueError:
             continue
-        if t[0] not in ELEMENT_COLLECTIONS:
-            continue
-        if len(t) == 1 or t[1] == '-':
-            v = o.get('value')
-            if isinstance(v, dict) and v.get('id'):
-                ids[v['id']] = True
-        else:
-            ids[t[1]] = True
+        value = o.get('value')
+        if t[0] in ELEMENT_COLLECTIONS:
+            if len(t) == 1:
+                for e in lst(scene.get(t[0])) + lst(value):
+                    add_el(e)
+            elif t[1] == '-':
+                add_el(value)
+            else:
+                ids[t[1]] = True
+        elif t[0] == 'constraints':
+            if len(t) == 1:
+                for c in lst(scene.get('constraints')) + lst(value):
+                    add_con(c)
+            else:
+                if t[1] != '-':
+                    add_con(next((c for c in lst(scene.get('constraints')) if isinstance(c, dict) and _strict_eq(c.get('id'), t[1])), None))
+                if len(t) == 2:
+                    add_con(value)
+                elif len(t) == 3 and t[2] in ('a', 'b') and isinstance(value, str):
+                    ids[value] = True
     return list(ids)
 
 
@@ -517,8 +596,11 @@ DAILY_REQUEST_CAP = _env_int('DAILY_REQUEST_CAP', 300)
 MAX_BODY_BYTES = _env_int('MAX_BODY_BYTES', 2 * 1024 * 1024)
 LOGIN_MAX_FAILS = _env_int('LOGIN_MAX_FAILS', 5)
 LOGIN_LOCKOUT_SEC = _env_int('LOGIN_LOCKOUT_MIN', 15) * 60
+LOGIN_WINDOW_SEC = 15 * 60  # failures count within 15 minutes
 SESSION_TTL = 7 * 24 * 3600
 MAX_SCENES = 500
+REQUEST_TIMEOUT_SEC = _env_int('REQUEST_TIMEOUT_SEC', 30)
+MAX_CONNECTIONS = _env_int('MAX_CONNECTIONS', 64)
 COOKIE_NAME = 'bms_session'
 SESSION_SECRET = b''  # set in main()
 PW_DIGEST = hashlib.sha256(APP_PASSWORD.encode('utf-8')).digest()
@@ -615,42 +697,57 @@ def cookie_header(value, max_age):
 
 
 class LoginGuard:
-    """Per-IP failure counter with lockout (CONTRACT 12.2)."""
+    """Per-IP failure counter with lockout (CONTRACT 12.2).
+
+    Each attempt is reserved under the lock before the password is compared and counts as a failure
+    while pending, so parallel requests can never test more than LOGIN_MAX_FAILS guesses per window.
+    A success clears settled failures (contract: success resets the count) but not other pending attempts.
+    """
 
     def __init__(self):
         self.lock = threading.Lock()
-        self.fails = {}   # ip -> deque of failure times
+        self.fails = {}   # ip -> deque of [time, 'pending' | 'failed']
         self.locked = {}  # ip -> unlock time
 
-    def locked_for(self, ip):
-        with self.lock:
-            until = self.locked.get(ip, 0)
-            left = until - time.time()
-            if left <= 0:
-                self.locked.pop(ip, None)
-                return 0
-            return int(math.ceil(left))
-
-    def fail(self, ip):
-        """Records a failure. Returns attempts left (0 = now locked)."""
+    def begin(self, ip):
+        """Reserves one attempt. Returns (seconds to wait, None) when locked out, else (0, token)."""
         now = time.time()
         with self.lock:
+            until = self.locked.get(ip)
+            if until is not None:
+                if until > now:
+                    return int(math.ceil(until - now)), None
+                del self.locked[ip]
+                self.fails.pop(ip, None)  # lockout served: start a fresh count
             if len(self.fails) > 10000:  # bound memory under a spray of IPs
-                for k in [k for k, q in self.fails.items() if not q or q[-1] < now - LOGIN_LOCKOUT_SEC]:
+                for k in [k for k, q in self.fails.items() if not q or q[-1][0] < now - LOGIN_WINDOW_SEC]:
                     del self.fails[k]
             q = self.fails.setdefault(ip, deque())
-            q.append(now)
-            while q and q[0] < now - LOGIN_LOCKOUT_SEC:
+            while q and q[0][0] < now - LOGIN_WINDOW_SEC:
                 q.popleft()
             if len(q) >= LOGIN_MAX_FAILS:
-                self.locked[ip] = now + LOGIN_LOCKOUT_SEC
-                del self.fails[ip]
-                return 0
-            return LOGIN_MAX_FAILS - len(q)
+                if all(e[1] == 'failed' for e in q):
+                    self.locked[ip] = now + LOGIN_LOCKOUT_SEC
+                    return LOGIN_LOCKOUT_SEC, None
+                return 1, None  # all slots taken by attempts still being checked
+            token = [now, 'pending']
+            q.append(token)
+            return 0, token
 
-    def success(self, ip):
+    def finish(self, ip, token, ok):
+        """Settles a reserved attempt. Returns attempts left (0 = now locked out)."""
         with self.lock:
-            self.fails.pop(ip, None)
+            q = self.fails.get(ip, deque())
+            if ok:
+                self.fails[ip] = deque(e for e in q if e is not token and e[1] == 'pending')
+                self.locked.pop(ip, None)
+                return LOGIN_MAX_FAILS
+            token[1] = 'failed'
+            left = LOGIN_MAX_FAILS - sum(1 for e in q if e[1] == 'failed')
+            if left <= 0:
+                self.locked[ip] = max(self.locked.get(ip, 0), time.time() + LOGIN_LOCKOUT_SEC)
+                return 0
+            return left
 
 
 class RateLimiter:
@@ -790,9 +887,20 @@ def render_prompt(name):
     return load_prompt(name).replace('{{ELEMENT_TYPES}}', render_element_types()).replace('{{RULES}}', rules)
 
 
+_KEYLIKE_RE = re.compile(r'sk-ant-[A-Za-z0-9_\-]+')
+
+
+def scrub(text):
+    """Removes the API key and anything key-shaped from text bound for the browser or a log."""
+    text = str(text)
+    if API_KEY:
+        text = text.replace(API_KEY, '[redacted]')
+    return _KEYLIKE_RE.sub('sk-ant-[redacted]', text)
+
+
 class LLMError(Exception):
     def __init__(self, code, message):
-        super().__init__(message)
+        super().__init__(scrub(message))
         self.code = code
 
 
@@ -864,6 +972,13 @@ def call_model(route, system, messages):
     except (urllib.error.URLError, OSError) as e:
         reason = getattr(e, 'reason', e)
         raise LLMError('llm_error', f'Model API unreachable: {type(reason).__name__}') from None
+    except (http.client.HTTPException, ValueError, TypeError, AttributeError, KeyError) as e:
+        raise LLMError('llm_error', f'Malformed response from the model API: {type(e).__name__}') from None
+    if out['stop_reason'] is None:  # connection dropped or truncated before message_delta
+        raise LLMError('llm_error', 'Model stream ended early')
+    if not isinstance(out['model'], str):
+        out['model'] = MODEL
+    out['usage'] = {k: v for k, v in out['usage'].items() if isinstance(v, int) and not isinstance(v, bool) and v >= 0}
     return out
 
 
@@ -944,7 +1059,8 @@ class Handler(BaseHTTPRequestHandler):
     server_version = 'BattleMapStudio'
     sys_version = ''
     protocol_version = 'HTTP/1.1'
-    timeout = 60  # client socket timeout (slow clients)
+    timeout = REQUEST_TIMEOUT_SEC  # per socket operation, so slow clients cannot hold a thread forever
+    head_only = False
 
     # ----- plumbing
     def end_headers(self):
@@ -965,7 +1081,8 @@ class Handler(BaseHTTPRequestHandler):
         for k, v in headers:
             self.send_header(k, v)
         self.end_headers()
-        self.wfile.write(data)
+        if not self.head_only:
+            self.wfile.write(data)
 
     def send_page(self, status, html, headers=()):
         data = html.encode('utf-8')
@@ -977,7 +1094,8 @@ class Handler(BaseHTTPRequestHandler):
         for k, v in headers:
             self.send_header(k, v)
         self.end_headers()
-        self.wfile.write(data)
+        if not self.head_only:
+            self.wfile.write(data)
 
     def redirect(self, location, headers=()):
         self.send_response(302)
@@ -1017,22 +1135,34 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         self.handle_request('DELETE')
 
+    def do_HEAD(self):
+        self.handle_request('HEAD')
+
+    def do_OPTIONS(self):
+        self.handle_request('OPTIONS')
+
+    def do_PATCH(self):
+        self.handle_request('PATCH')
+
     # ----- request pipeline
     def handle_request(self, method):
         path = urlsplit(self.path).path
         self._body_read = False
+        self.head_only = method == 'HEAD'
         try:
             public = (method, path) in (('GET', '/login'), ('POST', '/login'), ('GET', '/healthz'))
             self.sid = session_from_header(self.headers.get('Cookie'))
             if not public and not self.sid:
                 if path.startswith('/api/'):
                     raise ApiError(401, 'unauthorized', 'Sign in required')
-                self.close_connection = method != 'GET'  # an unread body must not be parsed as the next request
+                self.close_connection = method not in ('GET', 'HEAD')  # an unread body must not be parsed as the next request
                 return self.redirect('/login')
+            if method not in ('GET', 'POST', 'PUT', 'DELETE'):
+                raise ApiError(405, 'method_not_allowed', f'{method} is not supported')
             body = self.read_body() if method in ('POST', 'PUT', 'DELETE') else None
             self.route(method, path, body)
         except ApiError as e:
-            if method in ('POST', 'PUT', 'DELETE') and not getattr(self, '_body_read', False):
+            if method not in ('GET', 'HEAD') and not self._body_read:
                 self.close_connection = True
             self.send_error_json(e)
         except Exception:
@@ -1052,16 +1182,21 @@ class Handler(BaseHTTPRequestHandler):
                 raise ApiError(403, 'bad_origin', 'Cross-origin request refused')
         if self.headers.get('Transfer-Encoding'):
             raise ApiError(400, 'bad_request', 'Chunked bodies are not supported')
-        raw_len = self.headers.get('Content-Length') or '0'
-        if not raw_len.isdigit():
+        if len(self.headers.get_all('Content-Length') or []) > 1:
+            raise ApiError(400, 'bad_request', 'Duplicate Content-Length')
+        raw_len = (self.headers.get('Content-Length') or '0').strip()
+        if not re.fullmatch(r'[0-9]{1,10}', raw_len):
             raise ApiError(400, 'bad_request', 'Invalid Content-Length')
         n = int(raw_len)
         if n > MAX_BODY_BYTES:
             raise ApiError(413, 'payload_too_large', f'Request body exceeds {MAX_BODY_BYTES} bytes')
-        data = self.rfile.read(n) if n else b''
-        self._body_read = True
+        try:
+            data = self.rfile.read(n) if n else b''
+        except OSError:  # includes the socket timeout of a client that never sends the body
+            raise ApiError(400, 'bad_request', 'Request body was not received in time') from None
         if len(data) != n:
             raise ApiError(400, 'bad_request', 'Incomplete body')
+        self._body_read = True
         if not data.strip():
             return None
         try:
@@ -1104,19 +1239,19 @@ class Handler(BaseHTTPRequestHandler):
         self.send_page(200, LOGIN_PAGE)
 
     def login(self, body):
-        ip = self.client_ip()
-        wait = LOGIN_GUARD.locked_for(ip)
-        if wait:
-            raise ApiError(429, 'locked_out', 'Too many failed attempts. Try again later.', retryAfterSec=wait)
         if not isinstance(body, dict) or not isinstance(body.get('password'), str):
             raise ApiError(400, 'bad_request', 'Body must be {"password": "..."}')
+        ip = self.client_ip()
+        wait, token = LOGIN_GUARD.begin(ip)
+        if wait:
+            raise ApiError(429, 'locked_out', 'Too many failed attempts. Try again later.', retryAfterSec=wait)
         given = hashlib.sha256(body['password'].encode('utf-8', 'replace')).digest()
-        if not hmac.compare_digest(given, PW_DIGEST):
-            left = LOGIN_GUARD.fail(ip)
+        ok = hmac.compare_digest(given, PW_DIGEST)
+        left = LOGIN_GUARD.finish(ip, token, ok)
+        if not ok:
             if left == 0:
                 raise ApiError(429, 'locked_out', 'Too many failed attempts. Try again later.', retryAfterSec=LOGIN_LOCKOUT_SEC)
             raise ApiError(401, 'invalid_password', 'Wrong password', attemptsLeft=left)
-        LOGIN_GUARD.success(ip)
         self.send_json(200, {'ok': True}, [('Set-Cookie', cookie_header(make_cookie(), SESSION_TTL))])
 
     # ----- scenes
@@ -1193,7 +1328,8 @@ class Handler(BaseHTTPRequestHandler):
         if wait:
             raise ApiError(429, 'rate_limited', f'Too many requests (limit {RATE_LIMIT_PER_MIN} per minute)', retryAfterSec=wait)
         if not USAGE.take():
-            raise ApiError(429, 'daily_cap', f'Daily limit reached ({DAILY_REQUEST_CAP} requests). Resets at 00:00 UTC.',
+            plural = '' if DAILY_REQUEST_CAP == 1 else 's'
+            raise ApiError(429, 'daily_cap', f'Daily limit reached ({DAILY_REQUEST_CAP} request{plural}). Resets at 00:00 UTC.',
                            retryAfterSec=secs_to_utc_midnight())
 
     def run_llm(self, route, endpoint, system, first_user, check):
@@ -1342,6 +1478,47 @@ class Handler(BaseHTTPRequestHandler):
 
 PROMPTS = {}
 
+_BUSY_BODY = b'{"error":{"code":"busy","message":"Server is busy, try again shortly","retryAfterSec":5}}'
+BUSY_RESPONSE = (b'HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json; charset=utf-8\r\n'
+                 b'Cache-Control: no-store\r\nRetry-After: 5\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\n'
+                 b'Referrer-Policy: no-referrer\r\nX-Frame-Options: DENY\r\nContent-Length: '
+                 + str(len(_BUSY_BODY)).encode() + b'\r\n\r\n' + _BUSY_BODY)
+
+
+class Server(ThreadingHTTPServer):
+    """Threaded server with a bounded number of live connections (one thread each)."""
+    request_queue_size = 128
+    daemon_threads = True
+
+    def __init__(self, *args, **kw):
+        super().__init__(*args, **kw)
+        self.slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+
+    def process_request(self, request, client_address):
+        if not self.slots.acquire(blocking=False):
+            try:
+                request.settimeout(0.2)  # never let a slow client stall the accept loop
+                try:
+                    request.recv(65536)  # consume the request so closing does not reset the reply away
+                except OSError:
+                    pass
+                request.sendall(BUSY_RESPONSE)
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self.slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.slots.release()
+
 
 def main():
     global SESSION_SECRET, USAGE
@@ -1355,14 +1532,18 @@ def main():
     PROMPTS['edit'] = render_prompt('edit.md')
     if not API_KEY:
         sys.stderr.write('WARNING: ANTHROPIC_API_KEY is not set; /api/generate and /api/edit will return 503.\n')
-    httpd = ThreadingHTTPServer(('0.0.0.0', PORT), Handler)
-    httpd.daemon_threads = True
+    httpd = Server(('0.0.0.0', PORT), Handler)
+    # docker stop sends SIGTERM: stop serving at once (shutdown() must run outside the serve loop's thread).
+    signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown, daemon=True).start())
     sys.stderr.write(f'Battle Map Studio listening on 0.0.0.0:{PORT} (model {MODEL})\n')
     sys.stderr.flush()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        httpd.server_close()
+    sys.stderr.write('Battle Map Studio stopped\n')
 
 
 if __name__ == '__main__':

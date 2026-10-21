@@ -49,8 +49,13 @@ class FakeUpstream:
                 body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
                 up.requests.append({'headers': {k.lower(): v for k, v in self.headers.items()}, 'body': body})
                 script = up.queue.pop(0) if up.queue else up.default
+                if 'raw' in script:  # verbatim bytes (malformed responses), then hang up
+                    self.close_connection = True
+                    self.wfile.write(script['raw'])
+                    return
                 if 'status' in script:
-                    data = json.dumps({'type': 'error', 'error': {'type': 'overloaded_error', 'message': 'busy'}}).encode()
+                    data = json.dumps({'type': 'error', 'error': {'type': script.get('etype', 'overloaded_error'),
+                                                                  'message': script.get('message', 'busy')}}).encode()
                     self.send_response(script['status'])
                     self.send_header('Content-Type', 'application/json')
                     self.send_header('Content-Length', str(len(data)))
@@ -623,6 +628,222 @@ class SessionSecretEnvTest(Base):
         self.assertTrue(hd['set-cookie'].endswith('; Secure'))
         payload, sig = hd['set-cookie'].split(';')[0].split('=', 1)[1].rsplit('.', 1)
         self.assertEqual(sig, hmac.new(b'env-secret-value-for-tests', payload.encode(), hashlib.sha256).hexdigest())
+
+
+# ------------------------------------------------------------ review regressions
+
+def raw_request(port, data, shutdown_write=False, timeout=10):
+    """Sends raw bytes, returns the raw response (until the server closes, the body is complete, or a timeout)."""
+    with socket.create_connection(('127.0.0.1', port), timeout=timeout) as s:
+        s.sendall(data)
+        if shutdown_write:
+            s.shutdown(socket.SHUT_WR)
+        out = b''
+        try:
+            while True:
+                chunk = s.recv(65536)
+                if not chunk:
+                    break
+                out += chunk
+                if b'\r\n\r\n' in out:
+                    head, _, body = out.partition(b'\r\n\r\n')
+                    m = [ln for ln in head.split(b'\r\n') if ln.lower().startswith(b'content-length:')]
+                    if m and len(body) >= int(m[0].split(b':')[1]):
+                        break
+        except (socket.timeout, ConnectionError):
+            pass
+        return out
+
+
+def sse(*events):
+    return b''.join(f'data: {json.dumps(e)}\n\n'.encode() for e in events)
+
+
+class UpstreamRobustnessTest(Base):
+    """D4 / T1: malformed or hostile upstream responses become 502 llm_error, logged, never 500 or a key leak."""
+
+    def gen(self):
+        return self.api('POST', '/api/generate', {'description': 'x'})
+
+    def last_log(self):
+        return json.loads(read(os.path.join(self.tmp, 'usage.log')).strip().splitlines()[-1])
+
+    def test_malformed_streams(self):
+        head = b'HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n'
+        cases = {
+            'incomplete read': head + b'Content-Length: 5000\r\n\r\n' + sse({'type': 'ping'}),
+            'usage is a list': head + b'\r\n' + sse({'type': 'message_start', 'message': {'model': 'm', 'usage': [1, 2]}}),
+            'message is a list': head + b'\r\n' + sse({'type': 'message_start', 'message': [1]}),
+            'delta text not a string': head + b'\r\n' + sse(
+                {'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}},
+                {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': 5}}),
+            'garbage status line': b'NOT HTTP\r\n\r\n',
+        }
+        for name, raw in cases.items():
+            with self.subTest(name):
+                self.up.queue.append({'raw': raw})
+                st, _, js = self.gen()
+                self.assertEqual((st, js['error']['code']), (502, 'llm_error'), js)
+                e = self.last_log()
+                self.assertEqual((e['ok'], e['error']), (False, 'llm_error'))
+
+    def test_bad_usage_values_are_ignored(self):
+        raw = (b'HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n' + sse(
+            {'type': 'message_start', 'message': {'model': ['x'], 'usage': {'input_tokens': 'lots', 'output_tokens': -5,
+                                                                             'cache_read_input_tokens': True}}},
+            {'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': SAMPLE}},
+            {'type': 'message_delta', 'delta': {'stop_reason': 'end_turn'}, 'usage': {'output_tokens': None}}))
+        self.up.queue.append({'raw': raw})
+        st, _, js = self.gen()
+        self.assertEqual(st, 200, js)
+        e = self.last_log()
+        self.assertEqual((e['model'], e['inputTokens'], e['outputTokens'], e['cacheReadTokens']), ('claude-sonnet-5-5', 0, 0, 0))
+
+    def test_key_scrubbed_from_upstream_errors(self):
+        msg = f'invalid x-api-key {API_KEY} (also sk-ant-api03-OTHERKEY_abc-123)'
+        self.up.queue.append({'status': 401, 'etype': 'authentication_error', 'message': msg})
+        st, _, js = self.gen()
+        self.assertEqual((st, js['error']['code']), (502, 'llm_error'))
+        dumped = json.dumps(js)
+        self.assertNotIn(API_KEY, dumped)
+        self.assertNotIn('OTHERKEY', dumped)
+        self.assertIn('[redacted]', dumped)
+        self.up.queue.append({'raw': b'HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n' + sse(
+            {'type': 'error', 'error': {'type': 'api_error', 'message': 'echo ' + API_KEY}})})
+        st, _, js = self.gen()
+        self.assertEqual(st, 502)
+        self.assertNotIn(API_KEY, json.dumps(js))
+        for name in os.listdir(self.tmp):
+            p = os.path.join(self.tmp, name)
+            if os.path.isfile(p):
+                self.assertNotIn(API_KEY, read(p), name)
+                self.assertNotIn('OTHERKEY', read(p), name)
+
+
+class LoginRaceTest(Base):
+    env = {'LOGIN_MAX_FAILS': 5, 'TRUSTED_PROXY': 1}
+
+    def burst(self, ip, passwords):
+        barrier = threading.Barrier(len(passwords))
+        results = []
+
+        def go(pw):
+            barrier.wait()
+            st, _, _ = self.srv.request('POST', '/login', {'password': pw}, headers={'X-Forwarded-For': ip})
+            results.append((pw, st))
+
+        ts = [threading.Thread(target=go, args=(pw,)) for pw in passwords]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        return results
+
+    def test_parallel_wrong_guesses_capped(self):
+        res = self.burst('7.7.7.7', ['wrong-%d' % i for i in range(60)])
+        self.assertLessEqual(sum(1 for _, st in res if st == 401), 4)  # the 5th checked failure answers 429
+        self.assertEqual([st for _, st in res if st not in (401, 429)], [])
+        st, _, js = self.srv.request('POST', '/login', {'password': PASSWORD}, headers={'X-Forwarded-For': '7.7.7.7'})
+        self.assertEqual((st, js['error']['code']), (429, 'locked_out'))
+
+    def test_guard_reserves_before_checking(self):
+        sys.path.insert(0, ROOT)
+        os.environ.setdefault('APP_PASSWORD', 'unit-test-password')
+        import server
+        g, ip = server.LoginGuard(), '9.9.9.9'
+        tokens = [g.begin(ip) for _ in range(server.LOGIN_MAX_FAILS)]
+        self.assertTrue(all(w == 0 for w, _ in tokens))
+        self.assertGreater(g.begin(ip)[0], 0)  # every slot is pending: a 6th guess is not compared
+        g.finish(ip, tokens[0][1], True)  # a success clears settled failures but keeps other pending slots
+        w, t = g.begin(ip)
+        self.assertEqual(w, 0)
+        for _, tok in tokens[1:] + [(0, t)]:
+            left = g.finish(ip, tok, False)
+        self.assertEqual(left, 0)
+        self.assertGreater(g.begin(ip)[0], 0)  # locked: the right password is never compared
+
+
+class RequestHardeningTest(Base):
+    env = {'REQUEST_TIMEOUT_SEC': 1}
+
+    def post(self, cl_lines, body=b'', shutdown_write=False):
+        head = (b'POST /api/generate HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n'
+                + f'Cookie: bms_session={self.cookie}\r\n'.encode() + b''.join(cl_lines) + b'\r\n')
+        return raw_request(self.srv.port, head + body, shutdown_write)
+
+    def test_bad_content_length(self):
+        for cl in ([b'Content-Length: \xc2\xb2\r\n'], [b'Content-Length: -1\r\n'], [b'Content-Length: 12345678901\r\n'],
+                   [b'Content-Length: 1e3\r\n'], [b'Content-Length: 5\r\n', b'Content-Length: 3000000\r\n']):
+            with self.subTest(cl):
+                r = self.post(cl, b'{}')
+                self.assertTrue(r.startswith(b'HTTP/1.1 400'), r[:80])
+
+    def test_short_body(self):
+        t = time.time()
+        r = self.post([b'Content-Length: 100\r\n'], b'{"descr', shutdown_write=True)
+        self.assertTrue(r.startswith(b'HTTP/1.1 400'), r[:80])
+        r = self.post([b'Content-Length: 100\r\n'], b'{"descr')  # client stalls: the socket timeout fires
+        self.assertTrue(r.startswith(b'HTTP/1.1 400'), r[:80])
+        self.assertLess(time.time() - t, 8)
+        self.assertNotIn(b'internal', r)
+
+    def test_other_methods(self):
+        for m in ('HEAD', 'OPTIONS', 'PATCH'):
+            with self.subTest(m):
+                st, _, _ = self.srv.request(m, '/api/scenes')
+                self.assertEqual(st, 401)
+                st, hd, _ = self.srv.request(m, '/')
+                self.assertEqual((st, hd['location']), (302, '/login'))
+                st, hd, js = self.api(m, '/api/scenes')
+                self.assertEqual(st, 405)
+                if m != 'HEAD':
+                    self.assertEqual(js['error']['code'], 'method_not_allowed')
+                self.assertEqual(hd['x-frame-options'], 'DENY')
+        self.assertEqual(self.api('GET', '/api/session')[0], 200)
+
+
+class ConnectionCapTest(Base):
+    env = {'MAX_CONNECTIONS': 3, 'REQUEST_TIMEOUT_SEC': 5}
+
+    def test_busy_when_connection_slots_full(self):
+        idle = [socket.create_connection(('127.0.0.1', self.srv.port)) for _ in range(3)]
+        try:
+            time.sleep(0.5)
+            r = raw_request(self.srv.port, b'GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n')
+            self.assertTrue(r.startswith(b'HTTP/1.1 503'), r[:80])
+            self.assertIn(b'"busy"', r)
+        finally:
+            for s in idle:
+                s.close()
+        time.sleep(0.5)
+        self.assertEqual(self.srv.request('GET', '/healthz')[0], 200)
+
+    def test_queue_size(self):
+        sys.path.insert(0, ROOT)
+        os.environ.setdefault('APP_PASSWORD', 'unit-test-password')
+        import server
+        self.assertEqual(server.Server.request_queue_size, 128)
+
+
+class DailyCapSingularTest(Base):
+    env = {'DAILY_REQUEST_CAP': 1}
+
+    def test_singular_message(self):
+        self.assertEqual(self.api('POST', '/api/generate', {'description': 'x'})[0], 200)
+        st, _, js = self.api('POST', '/api/generate', {'description': 'x'})
+        self.assertEqual(js['error']['message'], 'Daily limit reached (1 request). Resets at 00:00 UTC.')
+
+
+@unittest.skipIf(os.name == 'nt', 'SIGTERM cannot be delivered to a handler on Windows')
+class SigtermTest(Base):
+    def test_clean_fast_shutdown(self):
+        import signal
+        t = time.time()
+        self.srv.proc.send_signal(signal.SIGTERM)
+        self.assertEqual(self.srv.proc.wait(5), 0)
+        self.assertLess(time.time() - t, 5)
+        self.assertIn('stopped', read(self.srv.log_path))
+        type(self).srv = Server(self.tmp, self.up.url)  # tearDownClass stops it
 
 
 if __name__ == '__main__':
