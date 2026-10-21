@@ -1,6 +1,7 @@
-// Draws the editor overlay (selection outlines, handles, size tag, measure line) into view.overlay.
+// Draws the editor overlay (selection outlines, handles, size tag, measure line) into the editor's own
+// overlay <svg> layer (see createOverlayLayer).
 // Everything is in feet; screen-constant sizes are divided by the current zoom.
-import { h } from '../core/svg.js';
+import { h, SVG_NS } from '../core/svg.js';
 import { TYPES, findElement } from '../schema.js';
 import { shapeOf, toWorld, boundsOf } from '../core/geom.js';
 import { sizeTag } from './ops.js';
@@ -88,10 +89,27 @@ export function selectionBounds(scene, ids) {
 }
 
 // state: { ids, showHandles, measure: {line?: {a, b, text}, pair?: {a, b, text}, pending?: id} }
-export function drawOverlay(view, scene, state) {
-  const g = view.overlay;
+// A separate composited <svg> stacked over the map with the same ft viewBox. Drawing selection
+// chrome inside the map svg forced Chrome to re-rasterise the filter-heavy map (100+ ms per select).
+export function createOverlayLayer(map, view) {
+  const svg = map.ownerDocument.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('class', 'bms-overlay');
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.setAttribute('aria-hidden', 'true');
+  const g = h('g', {}, [], map.ownerDocument);
+  svg.append(g);
+  map.append(svg);
+  // Wheel over a handle still zooms the map.
+  svg.addEventListener('wheel', e => { e.preventDefault(); view.svg.dispatchEvent(new WheelEvent('wheel', e)); }, { passive: false });
+  return { svg, g };
+}
+
+export function drawOverlay(layer, view, scene, state) {
+  const g = layer.g;
+  const vp = view.getViewport();
+  layer.svg.setAttribute('viewBox', `${vp.x} ${vp.y} ${vp.w} ${vp.h}`);
   const doc = g.ownerDocument;
-  const z = view.getViewport().zoom || 1;
+  const z = vp.zoom || 1;
   g.replaceChildren();
   const els = state.ids.map(id => findElement(scene, id)?.el).filter(Boolean);
   for (const el of els) g.append(...outline(el, doc));

@@ -108,7 +108,7 @@ export function initPopover(ctx) {
     };
     const sel = toRect(b);
     // Keep clear of the overlay's name/size tag and rotation handle too.
-    for (const n of view.overlay.querySelectorAll('.bms-tag, [data-handle="rotate"]')) {
+    for (const n of ctx.layer.g.querySelectorAll('.bms-tag, [data-handle="rotate"]')) {
       const q = n.getBoundingClientRect();
       if (!q.width) continue;
       sel.l = Math.min(sel.l, q.left - mr.left); sel.r = Math.max(sel.r, q.right - mr.left);

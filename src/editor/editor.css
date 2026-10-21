@@ -41,6 +41,9 @@
 @media (max-width: 1280px) { .bms-tool span, .bms-mini-label { display: none; } .bms-title { display: none; } }
 
 /* ---------- Map overlay pieces ---------- */
+/* Own compositor layer so selection chrome never forces a re-raster of the map svg. */
+.bms-overlay { position: absolute; inset: 0; width: 100%; height: 100%; display: block; z-index: 5; pointer-events: none; will-change: transform; overflow: hidden; border-radius: var(--radius); }
+.bms-popover, .bms-map-pill, .bms-readout { will-change: transform; }
 #map.bms-measuring svg { cursor: crosshair; }
 #map.bms-dragging svg, #map.bms-dragging svg * { cursor: grabbing !important; }
 

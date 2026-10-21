@@ -1,7 +1,7 @@
 // Editor entry: selection, tools, keyboard, overlay, and the UI pieces (topbar, popover, side panel, toasts).
 // See docs/CONTRACT.md section 8.
 import { findElement } from '../schema.js';
-import { drawOverlay } from './overlay.js';
+import { drawOverlay, createOverlayLayer } from './overlay.js';
 import { initPointer } from './pointer.js';
 import { initPopover } from './popover.js';
 import { initTopbar } from './topbar.js';
@@ -14,13 +14,15 @@ const isTyping = t => !!t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/
 export function initEditor({ store, view, bus, api, layout, dom }) {
   const state = { ids: [], tool: 'select', busy: false, measure: {}, preview: null, dragging: false, space: false };
 
+  const layer = createOverlayLayer(dom.map, view);
   const ctx = {
+    layer,
     store, view, bus, api, layout, dom, state,
     onRedraw: [], // UI pieces that follow the overlay (popover position)
     scene: () => state.preview || store.get(),
     status: (level, message) => bus.emit('status', { level, message }),
     redraw() {
-      drawOverlay(view, ctx.scene(), { ids: state.ids, showHandles: state.tool === 'select', measure: state.measure });
+      drawOverlay(layer, view, ctx.scene(), { ids: state.ids, showHandles: state.tool === 'select', measure: state.measure });
       for (const fn of ctx.onRedraw) fn();
     },
     // Show a temporary scene (drag preview) without committing; null restores the store scene.

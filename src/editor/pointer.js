@@ -36,8 +36,10 @@ export function initPointer(ctx) {
 
   const LABELS = { move: 'Move', resize: 'Resize', rotate: 'Rotate', point: 'Move point' };
 
-  svg.addEventListener('pointerdown', e => {
-    if (e.button !== 0 || state.space) return;
+  // Handles live in the editor overlay layer, map elements in the view svg; both sit inside #map.
+  const onMap = t => svg.contains(t) || ctx.layer.svg.contains(t);
+  ctx.dom.map.addEventListener('pointerdown', e => {
+    if (e.button !== 0 || state.space || !onMap(e.target)) return;
     const start = ft(e);
     const scene = store.get();
     const handle = e.target.closest?.('[data-handle]');
@@ -125,8 +127,8 @@ export function initPointer(ctx) {
   }
 
   // Double-click on a point handle removes it; on a selected path/region inserts a point.
-  svg.addEventListener('dblclick', e => {
-    if (state.tool !== 'select' || state.ids.length !== 1) return;
+  ctx.dom.map.addEventListener('dblclick', e => {
+    if (state.tool !== 'select' || state.ids.length !== 1 || !onMap(document.elementFromPoint(e.clientX, e.clientY))) return;
     const el = findElement(store.get(), state.ids[0])?.el;
     if (!el?.params?.points) return;
     // Pointer capture retargets click events to the svg, so hit-test the point instead of e.target.

@@ -196,7 +196,9 @@ export function mountView(container, bus) -> View
 ```js
 {
   svg,                       // live root <svg>
-  overlay,                   // <g data-layer="overlay"> above everything, same ft coordinates; editor-owned contents
+  overlay,                   // <g data-layer="overlay"> above everything, same ft coordinates. The editor draws its
+                             // handles in its own <svg class="bms-overlay"> over #map instead (drawing inside the
+                             // filter-heavy map svg forced full repaints), so this group is normally empty.
   setScene(scene),           // re-render (cache per element by JSON key; must stay < 100 ms for 300 elements after first paint)
   setLayerVisibility(name, visible), getLayerVisibility() -> {name: bool},
   screenToFt(clientX, clientY) -> {x, y}, ftToScreen(x, y) -> {x, y},
