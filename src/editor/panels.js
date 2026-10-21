@@ -200,7 +200,8 @@ function scenesPanel(ctx) {
   const { store, bus, api, view } = ctx;
   const list = html('ul', { class: 'bms-scenes' });
   let scenes = [];
-  let savedRef = store.get().meta.updatedAt ? store.get() : null;
+  // The store state at the last open/load/save; anything else counts as unsaved changes.
+  let savedRef = store.get(), last = store.get();
   const dirty = () => store.get() !== savedRef;
   const okToDiscard = () => !dirty() || confirm(`Discard unsaved changes to "${store.get().meta.name}"?`);
 
@@ -244,20 +245,27 @@ function scenesPanel(ctx) {
     refresh();
   }
 
+  // Meta changes for saving must not add undo history.
+  const setMeta = partial => {
+    const r = store.setMeta(partial);
+    if (!r.ok) ctx.status('error', `Save failed: ${formatErrors(r.errors)}`);
+    return r.ok;
+  };
   // Save (name = undefined) or Save as (new name -> new id).
   async function save(name) {
     let scene = store.get();
     if (name !== undefined) {
       const id = slugify(name);
       if (id !== scene.meta.id && scenes.some(s => s.id === id) && !confirm(`A scene with id "${id}" exists. Overwrite it?`)) return;
-      if (!ctx.commit([{ op: 'add', path: '/meta/name', value: name }, { op: 'add', path: '/meta/id', value: id }], 'Save as').ok) return;
+      if (!setMeta({ name, id })) return;
     } else if (!scene.meta.id) {
-      if (!ctx.commit([{ op: 'add', path: '/meta/id', value: slugify(scene.meta.name) }], 'Save').ok) return;
+      if (!setMeta({ id: slugify(scene.meta.name) })) return;
     }
     scene = store.get();
     try {
       const res = await api.saveScene(scene.meta.id, scene);
       savedRef = store.get();
+      if (res?.updatedAt) store.setMeta({ updatedAt: res.updatedAt });
       bus.emit('scene:saved', { id: res?.id ?? scene.meta.id, updatedAt: res?.updatedAt });
       ctx.status('ok', `Saved "${scene.meta.name}".`);
       refresh();
@@ -293,12 +301,16 @@ function scenesPanel(ctx) {
     if (!scene || !okToDiscard()) return;
     const r = store.reset(scene, { label: 'Open file' });
     if (!r.ok) { ctx.status('error', `Not a valid scene: ${formatErrors(r.errors)}`); return; }
-    savedRef = null;
+    savedRef = store.get();
     ctx.select([]);
     view.fit();
     ctx.status('ok', `Loaded "${store.get().meta.name}" from file. Save it to keep it in the library.`);
   }
-  bus.on('scene:changed', ({ source }) => { if (source === 'reset') renderList(); });
+  bus.on('scene:changed', ({ scene, source }) => {
+    if (source === 'meta' && last === savedRef) savedRef = scene; // meta-only updates keep a clean scene clean
+    last = scene;
+    if (source === 'reset' || source === 'meta') renderList();
+  });
   bus.on('scenes:refresh', refresh);
   refresh();
   return panel('Scenes', actions, asForm, list);

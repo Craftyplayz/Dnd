@@ -75,12 +75,14 @@ button, input, textarea, select { font: inherit; color: inherit; }
 #sidepanel.collapsed { width: 44px; }
 #sidepanel.collapsed > :not(.panel-toggle) { display: none; }
 #exportbar { grid-area: export; display: flex; align-items: center; justify-content: center; gap: var(--gap); padding: 0 var(--gap); }
-#toasts { position: fixed; right: 24px; bottom: calc(var(--exportbar-h) + 32px); display: flex; flex-direction: column; gap: 8px; z-index: 50; }
+/* Centred over the map column so toasts never cover side-panel controls. */
+#toasts { position: fixed; left: calc((100% - var(--sidepanel-w)) / 2); transform: translateX(-50%); bottom: calc(var(--exportbar-h) + 32px); display: flex; flex-direction: column; align-items: center; gap: 8px; z-index: 50; }
 
 .panel { padding: 12px 14px; }
 .panel h2 { font-size: 13px; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim); margin: 0 0 8px; }
 
 @media (max-width: 900px) {
   #app { grid-template-columns: 1fr; grid-template-areas: 'top' 'map' 'export'; }
+  #toasts { left: 50%; }
   #sidepanel { position: fixed; right: var(--gap); top: calc(var(--topbar-h) + 2 * var(--gap)); bottom: calc(var(--exportbar-h) + 2 * var(--gap)); z-index: 20; }
 }

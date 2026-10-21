@@ -2,6 +2,7 @@
 import { findElement, TYPES } from '../schema.js';
 import { html, nextId, elapsed, icon } from './ui.js';
 import { selectionBounds } from './overlay.js';
+import { boundsOf } from '../core/geom.js';
 import { outOfScope, errorMessage, formatErrors } from './ops.js';
 
 const trim1 = v => String(Math.round(v * 10) / 10);
@@ -12,22 +13,24 @@ export function initPopover(ctx) {
   const title = html('strong', { class: 'bms-pop-title' });
   const sub = html('span', { class: 'bms-pop-sub' });
   const meta = html('div', { class: 'bms-pop-meta' });
-  const ta = html('textarea', { id: taId, class: 'input', rows: 3, maxlength: 2000 });
+  const ta = html('textarea', { id: taId, class: 'input', rows: 2, maxlength: 2000 });
   const applyBtn = html('button', { type: 'button', class: 'btn primary', text: 'Apply', title: 'Apply (Ctrl+Enter)' });
   const statusEl = html('div', { class: 'bms-pop-status', role: 'status', 'aria-live': 'polite' });
   const collapseBtn = html('button', { type: 'button', class: 'bms-icon-btn', 'aria-label': 'Hide the map change box', title: 'Hide' }, [icon('close')]);
-  const box = html('div', { class: 'bms-popover card', role: 'region', 'aria-label': 'Describe a change' }, [
-    html('div', { class: 'bms-pop-head' }, [html('div', {}, [title, sub]), collapseBtn]),
+  const minBtn = html('button', { type: 'button', class: 'bms-icon-btn', 'aria-expanded': 'true' });
+  const head = html('div', { class: 'bms-pop-head', title: 'Drag to move' }, [html('div', { class: 'bms-pop-name' }, [title, sub]), minBtn, collapseBtn]);
+  const body = html('div', { class: 'bms-pop-body' }, [
     meta,
     html('label', { for: taId, class: 'bms-label', text: 'Describe the change' }),
     ta,
     html('div', { class: 'bms-pop-actions' }, [html('span', { class: 'bms-hint', text: 'Ctrl+Enter' }), applyBtn]),
-    statusEl,
   ]);
+  const box = html('div', { class: 'bms-popover card', role: 'region', 'aria-label': 'Describe a change' }, [head, body, statusEl]);
   const pill = html('button', { type: 'button', class: 'btn bms-map-pill', text: 'Describe a change to the whole map' });
   dom.map.append(box, pill);
 
-  let mode = null, collapsed = false;
+  // The whole-map box starts collapsed to a small button; the selection popover can be minimised to its title bar.
+  let mode = null, collapsed = true, minimised = false, manualPos = null;
   const drafts = new Map(); // instruction drafts per selection ('' key = whole map)
   let draftKey = null;
 
@@ -47,6 +50,7 @@ export function initPopover(ctx) {
       ta.value = drafts.get(key) || '';
       draftKey = key;
       mode = newMode;
+      manualPos = null;
       if (!state.busy) setStatus('', '');
     }
     const hide = state.tool !== 'select' || state.dragging;
@@ -54,6 +58,14 @@ export function initPopover(ctx) {
     box.hidden = hide || (mode === 'map' && collapsed);
     pill.hidden = hide || mode !== 'map' || !collapsed;
     collapseBtn.hidden = mode !== 'map';
+    minBtn.hidden = mode === 'map';
+    const min = mode === 'selection' && minimised;
+    box.classList.toggle('min', min);
+    body.hidden = min;
+    minBtn.replaceChildren(icon(min ? 'chevronDown' : 'chevronUp'));
+    minBtn.setAttribute('aria-expanded', String(!min));
+    minBtn.setAttribute('aria-label', min ? 'Expand the change box' : 'Minimise the change box');
+    minBtn.title = minBtn.getAttribute('aria-label');
     if (mode === 'map') {
       title.textContent = 'Change the whole map';
       sub.textContent = '';
@@ -78,23 +90,50 @@ export function initPopover(ctx) {
     if (!box.hidden) place(scene);
   }
 
-  // Beside the selection's screen rectangle, flipping left when there is no room.
+  // Beside the selection on the side that covers the fewest neighbouring objects, or where the user dragged it.
   function place(scene) {
+    const mr = dom.map.getBoundingClientRect();
+    const w = box.offsetWidth || 280, hgt = box.offsetHeight || 180, pad = 12, gapPx = 16;
+    const clampRect = (left, top) => ({
+      l: Math.max(pad, Math.min(left, mr.width - w - pad)),
+      t: Math.max(pad, Math.min(top, mr.height - hgt - pad)),
+    });
+    if (manualPos) { const c = clampRect(manualPos.l, manualPos.t); setPos(c); return; }
     const b = selectionBounds(scene, state.ids);
     if (!b) return;
-    const mr = dom.map.getBoundingClientRect();
-    const p1 = view.ftToScreen(b.minX, b.minY), p2 = view.ftToScreen(b.maxX, b.maxY);
-    const r = { l: Math.min(p1.x, p2.x) - mr.left, t: Math.min(p1.y, p2.y) - mr.top, r: Math.max(p1.x, p2.x) - mr.left };
-    // Keep clear of the overlay's name/size tag too.
-    const tag = view.overlay.querySelector('.bms-tag')?.getBoundingClientRect();
-    if (tag?.width) { r.l = Math.min(r.l, tag.left - mr.left); r.r = Math.max(r.r, tag.right - mr.left); }
-    const w = box.offsetWidth || 320, hgt = box.offsetHeight || 220, pad = 12, gapPx = 18;
-    let left = r.r + gapPx;
-    if (left + w > mr.width - pad) left = r.l - gapPx - w;
-    if (left < pad) left = Math.max(pad, mr.width - w - pad);
-    const top = Math.max(pad, Math.min(r.t, mr.height - hgt - pad));
-    box.style.left = `${left}px`;
-    box.style.top = `${top}px`;
+    const toRect = bb => {
+      const p1 = view.ftToScreen(bb.minX, bb.minY), p2 = view.ftToScreen(bb.maxX, bb.maxY);
+      return { l: Math.min(p1.x, p2.x) - mr.left, t: Math.min(p1.y, p2.y) - mr.top, r: Math.max(p1.x, p2.x) - mr.left, b: Math.max(p1.y, p2.y) - mr.top };
+    };
+    const sel = toRect(b);
+    // Keep clear of the overlay's name/size tag and rotation handle too.
+    for (const n of view.overlay.querySelectorAll('.bms-tag, [data-handle="rotate"]')) {
+      const q = n.getBoundingClientRect();
+      if (!q.width) continue;
+      sel.l = Math.min(sel.l, q.left - mr.left); sel.r = Math.max(sel.r, q.right - mr.left);
+      sel.t = Math.min(sel.t, q.top - mr.top); sel.b = Math.max(sel.b, q.bottom - mr.top);
+    }
+    // Large terrain (regions, paths) is under everything; only objects and labels count as obstacles.
+    const others = [...scene.objects, ...scene.labels].filter(e => !state.ids.includes(e.id)).map(e => toRect(boundsOf(e)));
+    const area = (a, r) => Math.max(0, Math.min(a.l + w, r.r) - Math.max(a.l, r.l)) * Math.max(0, Math.min(a.t + hgt, r.b) - Math.max(a.t, r.t));
+    const midY = (sel.t + sel.b) / 2 - hgt / 2, midX = (sel.l + sel.r) / 2 - w / 2;
+    // Right, left, below, above: centred first, then aligned to either end of that side.
+    const right = sel.r + gapPx, left = sel.l - gapPx - w, below = sel.b + gapPx, above = sel.t - gapPx - hgt;
+    const candidates = [
+      [right, midY], [left, midY], [midX, below], [midX, above],
+      [right, sel.t], [right, sel.b - hgt], [left, sel.t], [left, sel.b - hgt],
+      [sel.l, below], [sel.r - w, below], [sel.l, above], [sel.r - w, above],
+    ].map(([l, t]) => clampRect(l, t));
+    let best = null, bestScore = Infinity;
+    for (const c of candidates) {
+      const score = area(c, sel) * 20 + others.reduce((s, r) => s + area(c, r), 0);
+      if (score < bestScore - 1) { best = c; bestScore = score; }
+    }
+    setPos(best);
+  }
+  function setPos(c) {
+    box.style.left = `${c.l}px`;
+    box.style.top = `${c.t}px`;
   }
 
   async function apply() {
@@ -147,6 +186,19 @@ export function initPopover(ctx) {
     if (e.key === 'Escape') ta.blur();
   });
   collapseBtn.addEventListener('click', () => { collapsed = true; render(); pill.focus(); });
+  minBtn.addEventListener('click', () => { minimised = !minimised; render(); if (!minimised) ta.focus(); });
+  // Drag the popover by its title bar; the position holds until the selection changes.
+  head.addEventListener('pointerdown', e => {
+    if (mode !== 'selection' || e.button !== 0 || e.target.closest('button')) return;
+    e.preventDefault();
+    const start = { x: e.clientX, y: e.clientY, l: box.offsetLeft, t: box.offsetTop };
+    head.setPointerCapture(e.pointerId);
+    const move = ev => { manualPos = { l: start.l + ev.clientX - start.x, t: start.t + ev.clientY - start.y }; place(ctx.scene()); };
+    const up = () => { head.removeEventListener('pointermove', move); head.removeEventListener('pointerup', up); head.removeEventListener('pointercancel', up); };
+    head.addEventListener('pointermove', move);
+    head.addEventListener('pointerup', up);
+    head.addEventListener('pointercancel', up);
+  });
   pill.addEventListener('click', () => { collapsed = false; render(); ta.focus(); });
   // Keep pointer events in the popover from reaching the map.
   box.addEventListener('pointerdown', e => e.stopPropagation());

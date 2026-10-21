@@ -29,6 +29,8 @@ const ICONS = {
   chevronRight: 'M6 3l5 5-5 5',
   chevronLeft: 'M10 3L5 8l5 5',
   close: 'M4 4l8 8M12 4l-8 8',
+  chevronDown: 'M3 6l5 5 5-5',
+  chevronUp: 'M3 10l5-5 5 5',
   cursor: 'M3 2l10 5-4.5 1.5L7 13z',
   ruler: 'M2 11L11 2l3 3-9 9zM5 8l1.5 1.5M7 6l1.5 1.5M9 4l1.5 1.5',
   undo: 'M5 3L2 6l3 3M2 6h7a4 4 0 010 8H6',
