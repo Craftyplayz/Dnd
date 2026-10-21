@@ -249,7 +249,7 @@ class AuthTest(Base):
         self.assertAlmostEqual(exp, time.time() + 604800, delta=60)
         st, hd, js = self.api('GET', '/api/session')
         self.assertEqual(st, 200)
-        self.assertEqual(js, {'authenticated': True, 'model': 'claude-sonnet-5-5',
+        self.assertEqual(js, {'authenticated': True, 'model': 'claude-sonnet-5-5', 'backend': 'api',
                               'limits': {'ratePerMin': 20, 'dailyCap': 300}})
         st, hd, _ = self.api('GET', '/login')
         self.assertEqual((st, hd['location']), (302, '/'))
@@ -389,7 +389,8 @@ class GenerateTest(Base):
         self.assertEqual(js['attempts'], 1)
         self.assertEqual(js['scene']['seed'], 42)
         self.assertEqual(js['scene']['objects'][0]['layer'], 'objects')
-        self.assertEqual(set(js['usage']), {'date', 'requests', 'cap', 'remaining', 'inputTokens', 'outputTokens', 'costUsd', 'model'})
+        self.assertEqual(set(js['usage']), {'date', 'requests', 'cap', 'remaining', 'inputTokens', 'outputTokens', 'costUsd', 'model', 'backend'})
+        self.assertEqual(js['usage']['backend'], 'api')
         req = self.up.requests[0]
         h, b = req['headers'], req['body']
         self.assertEqual(h['x-api-key'], API_KEY)
@@ -471,7 +472,7 @@ class GenerateTest(Base):
         lines = read(os.path.join(self.tmp, 'usage.log')).strip().splitlines()
         e = json.loads(lines[-1])
         self.assertEqual(set(e) - {'error'}, {'ts', 'endpoint', 'model', 'attempt', 'inputTokens', 'outputTokens',
-                                               'cacheReadTokens', 'cacheWriteTokens', 'costUsd', 'ok', 'session'})
+                                               'cacheReadTokens', 'cacheWriteTokens', 'costUsd', 'ok', 'session', 'backend'})
         self.assertEqual((e['inputTokens'], e['outputTokens'], e['cacheReadTokens'], e['cacheWriteTokens']), (1000, 500, 3000, 2000))
         # sonnet: 1000*2 + 500*10 + 3000*0.2 + 2000*2.5 per million
         self.assertAlmostEqual(e['costUsd'], (2000 + 5000 + 600 + 5000) / 1e6)
@@ -854,6 +855,197 @@ class SigtermTest(Base):
         self.assertLess(time.time() - t, 5)
         self.assertIn('stopped', read(self.srv.log_path))
         type(self).srv = Server(self.tmp, self.up.url)  # tearDownClass stops it
+
+
+# ------------------------------------------------------------ LLM_BACKEND=claude-cli
+
+FAKE_CLAUDE = r'''
+import json, os, sys, time
+stdin = sys.stdin.buffer.read().decode('utf-8')
+qpath = os.environ['FAKE_CLAUDE_QUEUE']
+with open(qpath, encoding='utf-8') as f:
+    queue = json.load(f)
+item = queue.pop(0) if queue else {}
+with open(qpath, 'w', encoding='utf-8') as f:
+    json.dump(queue, f)
+with open(os.environ['FAKE_CLAUDE_LOG'], 'a', encoding='utf-8') as f:
+    f.write(json.dumps({'argv': sys.argv[1:], 'stdin': stdin, 'cwd': os.getcwd(), 'cwd_files': os.listdir('.'),
+                        'env': sorted(os.environ)}) + '\n')
+if 'sleep' in item:
+    time.sleep(item['sleep'])
+if 'raw' in item:
+    sys.stdout.write(item['raw'])
+    sys.stderr.write(item.get('stderr', ''))
+    sys.exit(item.get('exit', 1))
+sample = open(os.environ['FAKE_CLAUDE_SAMPLE'], encoding='utf-8').read()
+print(json.dumps({'type': 'result', 'subtype': 'success', 'is_error': item.get('is_error', False),
+                  'result': item.get('result', sample), 'stop_reason': item.get('stop_reason', 'end_turn'),
+                  'total_cost_usd': 0.42, 'modelUsage': {'claude-sonnet-5-5': {}},
+                  'usage': {'input_tokens': 10, 'cache_creation_input_tokens': 20, 'cache_read_input_tokens': 30,
+                            'output_tokens': 40}}))
+sys.exit(item.get('exit', 0))
+'''
+
+
+def make_fake_claude(dirpath):
+    script = os.path.join(dirpath, 'fake_claude.py')
+    with open(script, 'w', encoding='utf-8') as f:
+        f.write(FAKE_CLAUDE)
+    if os.name == 'nt':  # like the real npm install, which is claude.cmd
+        shim = os.path.join(dirpath, 'claude.cmd')
+        with open(shim, 'w', encoding='utf-8') as f:
+            f.write(f'@"{sys.executable}" "{script}" %*\r\n')
+    else:
+        shim = os.path.join(dirpath, 'claude')
+        with open(shim, 'w', encoding='utf-8') as f:
+            f.write(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n')
+        os.chmod(shim, 0o755)
+    return shim
+
+
+class CliBase(Base):
+    extra_env = {}
+
+    @classmethod
+    def setUpClass(cls):
+        cls.fake_dir = tempfile.mkdtemp(prefix='bms-fake-claude-')
+        cls.shim = make_fake_claude(cls.fake_dir)
+        cls.queue = os.path.join(cls.fake_dir, 'queue.json')
+        cls.calls = os.path.join(cls.fake_dir, 'calls.log')
+        sample = os.path.join(cls.fake_dir, 'sample.json')
+        with open(sample, 'w', encoding='utf-8') as f:
+            f.write(SAMPLE)
+        cls.env = {'LLM_BACKEND': 'claude-cli', 'CLAUDE_CLI': cls.shim, 'FAKE_CLAUDE_QUEUE': cls.queue,
+                   'FAKE_CLAUDE_LOG': cls.calls, 'FAKE_CLAUDE_SAMPLE': sample, 'LLM_TIMEOUT_SEC': 3,
+                   'SESSION_SECRET': 'cli-test-session-secret', **cls.extra_env}
+        super().setUpClass()
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
+        shutil.rmtree(cls.fake_dir, ignore_errors=True)
+
+    def setUp(self):
+        super().setUp()
+        self.script([])
+        if os.path.exists(self.calls):
+            os.remove(self.calls)
+
+    def script(self, items):
+        with open(self.queue, 'w', encoding='utf-8') as f:
+            json.dump(items, f)
+
+    def cli_calls(self):
+        return [json.loads(ln) for ln in read(self.calls).splitlines()] if os.path.exists(self.calls) else []
+
+    def gen(self):
+        return self.api('POST', '/api/generate', {'description': 'A ford with a watchtower'})
+
+
+class CliBackendTest(CliBase):
+    def test_valid_call_shape_and_usage(self):
+        st, _, js = self.gen()
+        self.assertEqual(st, 200, js)
+        self.assertEqual(js['attempts'], 1)
+        self.assertEqual((js['usage']['backend'], js['usage']['costUsd']), ('claude-cli', 0))
+        self.assertEqual(self.up.requests, [])  # the HTTP API is not used
+        (call,) = self.cli_calls()
+        self.assertEqual(call['argv'], ['-p', '--output-format', 'json', '--model', 'claude-sonnet-5-5', '--system-prompt',
+                                        'You produce JSON only, exactly as instructed in the input.', '--tools', '',
+                                        '--no-session-persistence', '--strict-mcp-config', '--setting-sources', ''])
+        self.assertIn('=== INSTRUCTIONS ===', call['stdin'])
+        self.assertIn('Stated distances are exact', call['stdin'])  # full system prompt goes through stdin
+        self.assertIn('A ford with a watchtower', call['stdin'])
+        for secret in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'APP_PASSWORD', 'SESSION_SECRET'):
+            self.assertNotIn(secret, call['env'])
+        self.assertEqual(call['cwd_files'], [])
+        self.assertNotEqual(os.path.realpath(call['cwd']), os.path.realpath(ROOT))
+        e = json.loads(read(os.path.join(self.tmp, 'usage.log')).strip().splitlines()[-1])
+        self.assertEqual((e['backend'], e['costUsd'], e['inputTokens'], e['outputTokens'], e['cacheReadTokens'],
+                          e['cacheWriteTokens'], e['ok']), ('claude-cli', 0, 10, 40, 30, 20, True))
+        self.assertEqual(self.api('GET', '/api/session')[2]['backend'], 'claude-cli')
+        self.assertIn('LLM backend claude-cli', read(self.srv.log_path))
+
+    def test_invalid_then_valid_flattens_retry(self):
+        self.script([{'result': 'not json at all'}, {}])
+        st, _, js = self.gen()
+        self.assertEqual((st, js['attempts']), (200, 2))
+        second = self.cli_calls()[1]['stdin']
+        self.assertIn('--- ASSISTANT (your previous answer) ---\nnot json at all', second)
+        self.assertIn('Your output has these problems', second)
+
+    def test_errors(self):
+        cases = [
+            ({'is_error': True, 'result': 'Invalid API key sk-ant-api03-LEAKED_key-1 / please run /login'}, 'llm_error', 'please run'),
+            ({'raw': 'Traceback garbage', 'stderr': 'boom ' + API_KEY, 'exit': 3}, 'llm_error', 'exit 3'),
+            ({'exit': 1}, 'llm_error', 'exit 1'),
+            ({'stop_reason': 'refusal', 'result': ''}, 'llm_refusal', 'declined'),
+        ]
+        for item, code, text in cases:
+            with self.subTest(item=item):
+                if os.path.exists(self.calls):
+                    os.remove(self.calls)
+                self.script([item, item])
+                st, _, js = self.gen()
+                self.assertEqual((st, js['error']['code']), (502, code), js)
+                self.assertIn(text, js['error']['message'])
+                self.assertNotIn('LEAKED', json.dumps(js))
+                self.assertNotIn(API_KEY, json.dumps(js))
+                self.assertEqual(len(self.cli_calls()), 1)  # no retry for errors and refusals
+        for name in os.listdir(self.tmp):
+            p = os.path.join(self.tmp, name)
+            if os.path.isfile(p):
+                self.assertNotIn('LEAKED', read(p))
+
+    def test_max_tokens_retries(self):
+        self.script([{'stop_reason': 'max_tokens', 'result': '{"meta": '}, {}])
+        st, _, js = self.gen()
+        self.assertEqual((st, js['attempts']), (200, 2))
+        self.assertIn('compact', self.cli_calls()[1]['stdin'])
+
+    def test_timeout(self):
+        self.script([{'sleep': 30}])
+        t = time.time()
+        st, _, js = self.gen()
+        self.assertEqual((st, js['error']['code']), (502, 'llm_error'))
+        self.assertIn('timed out', js['error']['message'])
+        self.assertLess(time.time() - t, 15)
+
+    def test_missing_executable(self):
+        os.rename(self.shim, self.shim + '.off')
+        try:
+            st, _, js = self.gen()
+        finally:
+            os.rename(self.shim + '.off', self.shim)
+        self.assertEqual((st, js['error']['code']), (502, 'llm_error'))
+        self.assertIn('claude CLI not found - install Claude Code and run `claude` once to log in', js['error']['message'])
+
+    def test_edit_route(self):
+        self.script([{'result': VALID_OPS}])
+        body = {'instruction': 'Light the fire', 'selectedIds': ['campfire'], 'selected': [], 'neighbours': [],
+                'summary': {}, 'scene': json.loads(SAMPLE)}
+        st, _, js = self.api('POST', '/api/edit', body)
+        self.assertEqual(st, 200, js)
+        self.assertEqual(js['summary'], 'Lit the campfire.')
+
+
+class CliNoKeyTest(CliBase):
+    extra_env = {'ANTHROPIC_API_KEY': None, 'DAILY_REQUEST_CAP': 1}
+
+    def test_works_without_key_and_cap_applies(self):
+        self.assertEqual(self.gen()[0], 200)  # no 503 llm_not_configured on this backend
+        st, _, js = self.gen()
+        self.assertEqual((st, js['error']['code']), (429, 'daily_cap'))
+
+
+class BackendStartupTest(unittest.TestCase):
+    def test_unknown_backend_refused(self):
+        env = {**os.environ, 'DATA_DIR': tempfile.mkdtemp(prefix='bms-test-'), 'PORT': str(free_port()),
+               'APP_PASSWORD': PASSWORD, 'LLM_BACKEND': 'carrier-pigeon'}
+        p = subprocess.run([sys.executable, os.path.join(ROOT, 'server.py')], env=env, capture_output=True, text=True, timeout=20)
+        self.assertEqual(p.returncode, 2)
+        self.assertIn('LLM_BACKEND', p.stderr)
+        shutil.rmtree(env['DATA_DIR'], ignore_errors=True)
 
 
 if __name__ == '__main__':

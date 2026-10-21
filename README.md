@@ -52,6 +52,9 @@ Run `python build.py` again after changing anything in `src/`.
 | `MAX_BODY_BYTES` | `2097152` | Largest accepted request body |
 | `LOGIN_MAX_FAILS` / `LOGIN_LOCKOUT_MIN` | `5` / `15` | Failed logins from one IP before a lockout, and its length |
 | `REQUEST_TIMEOUT_SEC` / `MAX_CONNECTIONS` | `30` / `64` | Idle timeout per connection, and the most concurrent connections (extra ones get 503) |
+| `LLM_BACKEND` | `api` | `api` = Anthropic API with `ANTHROPIC_API_KEY`; `claude-cli` = your Claude subscription through Claude Code (local only, see below) |
+| `CLAUDE_CLI` | `claude` | Claude Code executable used when `LLM_BACKEND=claude-cli` |
+| `LLM_TIMEOUT_SEC` | `config.json` `timeoutSec` (300) | Longest a single model call may take |
 
 Per-token prices for the usage indicator are in `config.json` (`pricing`). Every AI request's token usage is appended to `DATA_DIR/usage.log`.
 
@@ -62,6 +65,15 @@ Per-token prices for the usage indicator are in `config.json` (`pricing`). Every
 3. **Set a monthly spend limit on the Limits page of the Anthropic Console.** The app's own daily request cap and per-session rate limit protect you from runaway use inside the app; the Console limit is the hard stop if anything else goes wrong, such as a leaked key.
 
 With the default model a generation typically costs roughly 5 to 30 US cents, depending on map size; an element edit costs about a cent. The side panel shows today's request count and estimated cost.
+
+## Use your Claude subscription instead of an API key (local only)
+
+If you run the app on your own computer just for yourself, it can use your Claude plan (for example Max) instead of an API key:
+
+1. Install Claude Code (https://claude.com/claude-code) and run `claude` once in a terminal to log in with your Claude account.
+2. Start the server with `LLM_BACKEND=claude-cli` (and no `ANTHROPIC_API_KEY` needed). The startup line says `LLM backend claude-cli`.
+
+Each Generate or AI edit then runs `claude -p` in headless mode and counts against your plan's usage limits; the usage panel shows a cost of 0 because nothing is billed per token. This is only for running the app on your own machine for yourself: the Docker image does not include Claude Code, and if other people will use the app, use an API key instead.
 
 ## Using it
 

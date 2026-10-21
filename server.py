@@ -16,7 +16,9 @@ import math
 import os
 import re
 import secrets
+import shutil
 import signal
+import subprocess
 import sys
 import tempfile
 import threading
@@ -589,6 +591,11 @@ APP_PASSWORD = os.environ.get('APP_PASSWORD', '')
 API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
 API_URL = os.environ.get('ANTHROPIC_API_URL') or CONFIG.get('apiUrl') or 'https://api.anthropic.com/v1/messages'
 MODEL = os.environ.get('CLAUDE_MODEL') or CONFIG.get('model') or 'claude-sonnet-5-5'
+# 'api' = Messages API with ANTHROPIC_API_KEY; 'claude-cli' = Claude Code headless mode on the
+# logged-in subscription (local use only).
+LLM_BACKEND = (os.environ.get('LLM_BACKEND') or 'api').strip().lower()
+CLAUDE_CLI = os.environ.get('CLAUDE_CLI') or 'claude'
+LLM_TIMEOUT_SEC = int(os.environ.get('LLM_TIMEOUT_SEC') or CONFIG.get('timeoutSec', 300))
 COOKIE_SECURE = os.environ.get('COOKIE_SECURE') == '1'
 TRUSTED_PROXY = os.environ.get('TRUSTED_PROXY') == '1'
 RATE_LIMIT_PER_MIN = _env_int('RATE_LIMIT_PER_MIN', 20)
@@ -820,8 +827,8 @@ class Usage:
         with self.lock:
             self._roll()
             d = dict(self.day)
-        d.update(cap=DAILY_REQUEST_CAP, remaining=max(0, DAILY_REQUEST_CAP - d['requests']), model=MODEL)
-        return {k: d[k] for k in ('date', 'requests', 'cap', 'remaining', 'inputTokens', 'outputTokens', 'costUsd', 'model')}
+        d.update(cap=DAILY_REQUEST_CAP, remaining=max(0, DAILY_REQUEST_CAP - d['requests']), model=MODEL, backend=LLM_BACKEND)
+        return {k: d[k] for k in ('date', 'requests', 'cap', 'remaining', 'inputTokens', 'outputTokens', 'costUsd', 'model', 'backend')}
 
 
 # ---------------------------------------------------------------- LLM
@@ -921,7 +928,7 @@ def call_model(route, system, messages):
         if CONFIG.get('betas'):
             headers['anthropic-beta'] = ','.join(CONFIG['betas'])
     req = urllib.request.Request(API_URL, data=json.dumps(body).encode('utf-8'), headers=headers, method='POST')
-    timeout = CONFIG.get('timeoutSec', 300)
+    timeout = LLM_TIMEOUT_SEC
     deadline = time.time() + timeout
     out = {'text': '', 'stop_reason': None, 'model': MODEL, 'usage': {}}
     blocks = {}
@@ -980,6 +987,75 @@ def call_model(route, system, messages):
         out['model'] = MODEL
     out['usage'] = {k: v for k, v in out['usage'].items() if isinstance(v, int) and not isinstance(v, bool) and v >= 0}
     return out
+
+
+CLI_SYSTEM_PROMPT = 'You produce JSON only, exactly as instructed in the input.'
+# Secrets the CLI must not see: without a key it uses the logged-in subscription.
+CLI_ENV_DROP = ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'APP_PASSWORD', 'SESSION_SECRET')
+
+
+def cli_prompt(system, messages):
+    """Flattens the system prompt and conversation into one stdin text (command lines are too short)."""
+    parts = ['=== INSTRUCTIONS ===', system, '', '=== CONVERSATION ===']
+    for m in messages:
+        who = 'USER' if m['role'] == 'user' else 'ASSISTANT (your previous answer)'
+        parts += [f'--- {who} ---', m['content'], '']
+    parts.append('=== Reply to the last USER message now, following the INSTRUCTIONS. ===')
+    return '\n'.join(parts)
+
+
+def _kill_tree(proc):
+    try:
+        if os.name == 'nt':  # a .cmd shim runs the real CLI as a grandchild
+            subprocess.run(['taskkill', '/T', '/F', '/PID', str(proc.pid)], capture_output=True, timeout=10)
+        else:
+            os.killpg(proc.pid, signal.SIGKILL)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    proc.kill()
+
+
+def call_cli(route, system, messages):
+    """One Claude Code headless call (`claude -p`). Returns {text, stop_reason, model, usage} like call_model."""
+    exe = shutil.which(CLAUDE_CLI)
+    if not exe:
+        raise LLMError('llm_error', 'claude CLI not found - install Claude Code and run `claude` once to log in')
+    args = [exe, '-p', '--output-format', 'json', '--model', MODEL, '--system-prompt', CLI_SYSTEM_PROMPT,
+            '--tools', '', '--no-session-persistence', '--strict-mcp-config', '--setting-sources', '']
+    env = {k: v for k, v in os.environ.items() if k not in CLI_ENV_DROP}
+    with tempfile.TemporaryDirectory(prefix='bms-cli-') as cwd:
+        try:
+            proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    cwd=cwd, env=env, start_new_session=os.name != 'nt')
+        except OSError:
+            raise LLMError('llm_error', 'claude CLI not found - install Claude Code and run `claude` once to log in') from None
+        try:
+            out, err = proc.communicate(cli_prompt(system, messages).encode('utf-8'), timeout=LLM_TIMEOUT_SEC)
+        except subprocess.TimeoutExpired:
+            _kill_tree(proc)
+            try:
+                proc.communicate(timeout=5)
+            except (subprocess.TimeoutExpired, OSError, ValueError):
+                pass
+            raise LLMError('llm_error', f'claude CLI timed out after {LLM_TIMEOUT_SEC} s') from None
+    try:
+        res = json.loads(out.decode('utf-8', 'replace'))
+    except ValueError:
+        res = None
+    if not isinstance(res, dict):
+        tail = err.decode('utf-8', 'replace').strip()[-300:] or out.decode('utf-8', 'replace').strip()[:300]
+        raise LLMError('llm_error', f'claude CLI failed (exit {proc.returncode}): {tail}')
+    if res.get('is_error') or proc.returncode != 0:
+        reason = res.get('result') if isinstance(res.get('result'), str) else err.decode('utf-8', 'replace')
+        raise LLMError('llm_error', f'claude CLI failed (exit {proc.returncode}): {reason.strip()[:300]}')
+    usage = res.get('usage') if isinstance(res.get('usage'), dict) else {}
+    return {'text': res.get('result') if isinstance(res.get('result'), str) else '',
+            'stop_reason': res.get('stop_reason'), 'model': MODEL,
+            'usage': {k: v for k, v in usage.items() if isinstance(v, int) and not isinstance(v, bool) and v >= 0}}
+
+
+def call_llm(route, system, messages):
+    return call_cli(route, system, messages) if LLM_BACKEND == 'claude-cli' else call_model(route, system, messages)
 
 
 def cost_of(model, usage):
@@ -1219,7 +1295,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/logout' and method == 'POST':
             return self.send_json(200, {'ok': True}, [('Set-Cookie', cookie_header('', 0))])
         if path == '/api/session' and method == 'GET':
-            return self.send_json(200, {'authenticated': True, 'model': MODEL,
+            return self.send_json(200, {'authenticated': True, 'model': MODEL, 'backend': LLM_BACKEND,
                                         'limits': {'ratePerMin': RATE_LIMIT_PER_MIN, 'dailyCap': DAILY_REQUEST_CAP}})
         if path == '/api/usage' and method == 'GET':
             return self.send_json(200, USAGE.snapshot())
@@ -1339,7 +1415,7 @@ class Handler(BaseHTTPRequestHandler):
         errors = []
         for attempt in (1, 2):
             try:
-                r = call_model(route, system, messages)
+                r = call_llm(route, system, messages)
             except LLMError as e:
                 self.log_call(endpoint, attempt, {}, MODEL, False, e.code)
                 raise ApiError(502, e.code, str(e)) from None
@@ -1372,14 +1448,14 @@ class Handler(BaseHTTPRequestHandler):
              'cacheReadTokens': int(usage.get('cache_read_input_tokens') or 0),
              'cacheWriteTokens': int(usage.get('cache_creation_input_tokens') or 0)}
         entry = {'ts': now_iso(), 'endpoint': endpoint, 'model': model, 'attempt': attempt, **u,
-                 'costUsd': cost_of(model, u), 'ok': ok,
+                 'costUsd': 0 if LLM_BACKEND == 'claude-cli' else cost_of(model, u), 'ok': ok, 'backend': LLM_BACKEND,
                  'session': hashlib.sha256(self.sid.encode('ascii')).hexdigest()[:12]}
         if error:
             entry['error'] = error
         USAGE.record(entry)
 
     def require_llm(self):
-        if not API_KEY:
+        if LLM_BACKEND == 'api' and not API_KEY:
             raise ApiError(503, 'llm_not_configured', 'ANTHROPIC_API_KEY is not set on the server')
 
     def generate(self, body):
@@ -1531,12 +1607,18 @@ def main():
     USAGE = Usage()
     PROMPTS['generate'] = render_prompt('generate.md')
     PROMPTS['edit'] = render_prompt('edit.md')
-    if not API_KEY:
+    if LLM_BACKEND not in ('api', 'claude-cli'):
+        sys.stderr.write(f'ERROR: LLM_BACKEND must be "api" or "claude-cli", not "{LLM_BACKEND}". Refusing to start.\n')
+        sys.exit(2)
+    if LLM_BACKEND == 'claude-cli':
+        if not shutil.which(CLAUDE_CLI):
+            sys.stderr.write(f'WARNING: LLM_BACKEND=claude-cli but "{CLAUDE_CLI}" was not found; install Claude Code and run `claude` once to log in.\n')
+    elif not API_KEY:
         sys.stderr.write('WARNING: ANTHROPIC_API_KEY is not set; /api/generate and /api/edit will return 503.\n')
     httpd = Server(('0.0.0.0', PORT), Handler)
     # docker stop sends SIGTERM: stop serving at once (shutdown() must run outside the serve loop's thread).
     signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=httpd.shutdown, daemon=True).start())
-    sys.stderr.write(f'Battle Map Studio listening on 0.0.0.0:{PORT} (model {MODEL})\n')
+    sys.stderr.write(f'Battle Map Studio listening on 0.0.0.0:{PORT} (model {MODEL}, LLM backend {LLM_BACKEND})\n')
     sys.stderr.flush()
     try:
         httpd.serve_forever()
