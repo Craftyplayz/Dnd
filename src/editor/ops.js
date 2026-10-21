@@ -1,5 +1,5 @@
 // Pure editor logic: op builders, scope check, formatting. No DOM; tested by tests/editor.test.mjs.
-import { TYPES, findElement, KIND_COLLECTION } from '../schema.js';
+import { TYPES, findElement, KIND_COLLECTION, checkScene } from '../schema.js';
 import { touchedIds, parsePath } from '../core/patch.js';
 import { snapPosition, toLocal, toWorld, pointSegDist, snap } from '../core/geom.js';
 
@@ -168,3 +168,18 @@ export function errorMessage(err) {
 }
 
 export const formatErrors = errors => (errors || []).slice(0, 3).map(e => `${e.path} ${e.message}`).join('; ');
+
+// Run the layout engine on a candidate scene. Never loses the candidate: if layout throws or
+// returns an invalid scene, the candidate comes back unchanged with the reason in `error`.
+export function layoutOrFallback(candidate, layout) {
+  try {
+    const out = layout.layoutScene(candidate, { fix: true });
+    const res = checkScene(out?.scene);
+    if (res.ok) return { scene: out.scene, report: out.report || null, moved: out.moved || out.report?.moved || [], error: null };
+    return { scene: candidate, report: null, moved: [], error: `layout produced an invalid scene (${formatErrors(res.errors)})` };
+  } catch (e) {
+    return { scene: candidate, report: null, moved: [], error: `layout failed (${e?.message || e})` };
+  }
+}
+
+export const reportErrors = report => (report?.items || []).filter(i => i.level === 'error').length;

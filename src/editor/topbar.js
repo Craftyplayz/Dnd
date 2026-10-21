@@ -1,6 +1,6 @@
 // #topbar: title, generate box, tools, undo/redo, save, logout.
 import { html, nextId, elapsed, icon } from './ui.js';
-import { errorMessage, formatErrors } from './ops.js';
+import { errorMessage, formatErrors, layoutOrFallback, reportErrors } from './ops.js';
 
 // Optional map size: blank, or an integer multiple of 5 in 20..600.
 export function parseSize(v) {
@@ -87,13 +87,20 @@ export function initTopbar(ctx) {
       try {
         const res = await api.generate(req);
         const secs = stop();
-        const out = layout.layoutScene(res.scene, { fix: true });
-        const r = store.set(out.scene, { label: 'Generate', source: 'generate' });
+        // A paid generation is never lost: if layout fails, keep the server's (already validated) scene.
+        let out = layoutOrFallback(res.scene, layout);
+        let r = store.set(out.scene, { label: 'Generate', source: 'generate' });
+        if (!r.ok && out.scene !== res.scene) {
+          out = { ...out, scene: res.scene, report: null, error: `the laid-out map was rejected (${formatErrors(r.errors)})` };
+          r = store.set(res.scene, { label: 'Generate', source: 'generate' });
+        }
         if (!r.ok) { ctx.status('error', `The generated map was invalid: ${formatErrors(r.errors)}`); return; }
         ctx.select([]);
         view.fit();
-        const issues = (out.report?.items || []).filter(i => i.level === 'error').length;
-        ctx.status(issues ? 'warn' : 'ok', `Generated "${out.scene.meta.name}" in ${secs} s${issues ? `, ${issues} layout issue(s): see Distances` : ''}.`);
+        const name = store.get().meta.name;
+        if (out.error) { ctx.status('warn', `Generated "${name}" in ${secs} s, but ${out.error}. The map is shown without layout fixes.`); return; }
+        const issues = reportErrors(out.report);
+        ctx.status(issues ? 'warn' : 'ok', `Generated "${name}" in ${secs} s${issues ? `, ${issues} layout issue(s): see Distances` : ''}.`);
       } catch (err) {
         stop();
         ctx.status('error', `Generate failed: ${errorMessage(err)}`);

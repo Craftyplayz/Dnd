@@ -2,7 +2,7 @@
 import { SCHEMA, TYPES, VIEW_LAYERS, findElement, slugify } from '../schema.js';
 import { downloadSceneJson, pickSceneJson } from '../storage/file.js';
 import { html, nextId, icon } from './ui.js';
-import { fieldOps, errorMessage, formatErrors } from './ops.js';
+import { fieldOps, errorMessage, formatErrors, layoutOrFallback, reportErrors } from './ops.js';
 
 const LAYER_NAMES = { terrain: 'Terrain', ground: 'Ground', low: 'Low features', objects: 'Objects', canopy: 'Tree canopy', labels: 'Labels', grid: 'Grid', lighting: 'Lighting' };
 const resolve = s => (s?.$ref ? s.$ref.slice(2).split('/').reduce((o, k) => o[k], SCHEMA) : s || {});
@@ -43,7 +43,20 @@ function distancesPanel(ctx) {
   const head = html('p', { class: 'bms-dim', text: 'No report yet.' });
   const list = html('ul', { class: 'bms-report' });
   const order = { error: 0, warn: 1, ok: 2 };
+  const fixBtn = html('button', { type: 'button', class: 'btn small', text: 'Fix layout', disabled: true, title: 'Move elements to satisfy stated distances and remove collisions' });
+  fixBtn.addEventListener('click', () => {
+    const before = reportErrors(lastReport);
+    const lo = layoutOrFallback(ctx.store.get(), ctx.layout);
+    if (lo.error) { ctx.status('error', `Fix layout failed: ${lo.error}.`); return; }
+    const r = ctx.store.set(lo.scene, { label: 'Fix layout', source: 'layout' });
+    if (!r.ok) { ctx.status('error', `Fix layout failed: ${formatErrors(r.errors)}`); return; }
+    const after = reportErrors(lo.report), moved = lo.report?.moved?.length ?? 0;
+    ctx.status(after ? 'warn' : 'ok', `Fix layout moved ${moved} element${moved === 1 ? '' : 's'}; ${before - after} of ${before} errors fixed${after ? `, ${after} remain` : ''}.`);
+  });
+  let lastReport = null;
   ctx.bus.on('report:updated', ({ report }) => {
+    lastReport = report;
+    fixBtn.disabled = !reportErrors(report);
     const items = [...(report?.items || [])].sort((a, b) => order[a.level] - order[b.level]);
     const n = l => items.filter(i => i.level === l).length;
     const s = report?.stats;
@@ -59,7 +72,7 @@ function distancesPanel(ctx) {
       return html('li', {}, [btn]);
     }));
   });
-  return panel('Distances', head, list);
+  return panel('Distances', html('div', { class: 'bms-report-head' }, [head, fixBtn]), list);
 }
 
 // ---------- Properties ----------

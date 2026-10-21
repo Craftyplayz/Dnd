@@ -1,9 +1,10 @@
 // "Describe the change" popover beside the selection, or a docked whole-map box when nothing is selected.
-import { findElement, TYPES } from '../schema.js';
+import { findElement, TYPES, checkScene } from '../schema.js';
+import { applyPatch } from '../core/patch.js';
 import { html, nextId, elapsed, icon } from './ui.js';
 import { selectionBounds } from './overlay.js';
 import { boundsOf } from '../core/geom.js';
-import { outOfScope, errorMessage, formatErrors } from './ops.js';
+import { outOfScope, errorMessage, formatErrors, layoutOrFallback } from './ops.js';
 
 const trim1 = v => String(Math.round(v * 10) / 10);
 
@@ -167,8 +168,16 @@ export function initPopover(ctx) {
       }
       if (!res.ops.length) { setStatus('warn', res.summary ? `No changes: ${res.summary}` : 'The AI made no changes.'); return; }
       const label = 'AI: ' + (instruction.length > 60 ? instruction.slice(0, 57) + '...' : instruction);
-      const r = store.commit(res.ops, { label, source: 'ai' });
+      // Apply to the current scene, then let layout repair stated distances: one undo step.
+      let candidate;
+      try { candidate = applyPatch(store.get(), res.ops); } catch (err) { return fail(`The AI's change could not be applied, so nothing was changed: ${err.message}`); }
+      const valid = checkScene(candidate);
+      if (!valid.ok) return fail(`The AI's change was invalid, so nothing was changed: ${formatErrors(valid.errors)}`);
+      const lo = layoutOrFallback(valid.scene, layout);
+      let r = store.set(lo.scene, { label, source: 'ai' });
+      if (!r.ok && lo.scene !== valid.scene) r = store.set(valid.scene, { label, source: 'ai' });
       if (!r.ok) return fail(`The AI's change was invalid, so nothing was changed: ${formatErrors(r.errors)}`);
+      if (lo.error) ctx.status('warn', `AI change applied without layout fixes: ${lo.error}.`);
       if (draftKey === [...ids].sort().join(',')) ta.value = '';
       drafts.delete([...ids].sort().join(','));
       setStatus('ok', `${res.summary || 'Change applied.'} (${secs} s)`);

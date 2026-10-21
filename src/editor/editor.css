@@ -128,3 +128,5 @@
 .bms-toast.error { border-color: var(--error); }
 .bms-toast.warn { border-color: var(--warn); }
 
+.bms-report-head { display: flex; align-items: flex-start; gap: 8px; }
+.bms-report-head p { flex: 1; }

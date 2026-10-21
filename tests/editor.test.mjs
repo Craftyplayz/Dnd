@@ -9,7 +9,9 @@ import { toWorld } from '../src/core/geom.js';
 import {
   outOfScope, addedIds, moveOps, nudgeOps, deleteOps, resizeOps, rotateOps, pointOps,
   removePointOps, insertPointOps, fieldOps, formatFeet, sizeTag, errorMessage, elPath,
+  layoutOrFallback, reportErrors,
 } from '../src/editor/ops.js';
+import * as layout from '../src/layout/index.js';
 import { parseSize } from '../src/editor/topbar.js';
 
 const load = name => checkScene(JSON.parse(readFileSync(new URL(`../samples/${name}.json`, import.meta.url), 'utf8'))).scene;
@@ -163,4 +165,31 @@ test('generate size parsing', () => {
   assert.equal(parseSize('15').ok, false);
   assert.equal(parseSize('605').ok, false);
   assert.equal(parseSize('abc').ok, false);
+});
+
+test('layoutOrFallback: real layout repairs a stated distance broken by an edit', () => {
+  const c = scene.constraints[0];
+  assert.ok(c, 'sample has a constraint');
+  const b = findElement(scene, c.b).el;
+  const moved = valid([{ op: 'replace', path: elPath(b, 'position'), value: { x: Math.min(scene.grid.widthFt, b.position.x + 7), y: b.position.y } }]);
+  assert.ok(reportErrors(layout.checkScene(moved)) > 0, 'edit breaks the constraint');
+  const lo = layoutOrFallback(moved, layout);
+  assert.equal(lo.error, null);
+  assert.ok(checkScene(lo.scene).ok);
+  const item = lo.report.items.find(i => i.kind === 'constraint' && i.ids.includes(c.b));
+  assert.equal(item.level, 'ok');
+});
+
+test('layoutOrFallback: throwing or invalid layout keeps the candidate', () => {
+  const thrown = layoutOrFallback(scene, { layoutScene: () => { throw new Error('boom'); } });
+  assert.equal(thrown.scene, scene);
+  assert.match(thrown.error, /boom/);
+  const bad = layoutOrFallback(scene, { layoutScene: s => ({ scene: { ...s, grid: { ...s.grid, widthFt: 7 } }, report: {} }) });
+  assert.equal(bad.scene, scene);
+  assert.match(bad.error, /invalid scene/);
+  const none = layoutOrFallback(scene, { layoutScene: () => undefined });
+  assert.equal(none.scene, scene);
+  assert.ok(none.error);
+  assert.equal(reportErrors({ items: [{ level: 'error' }, { level: 'warn' }, { level: 'error' }] }), 2);
+  assert.equal(reportErrors(null), 0);
 });
