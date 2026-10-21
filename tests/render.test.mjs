@@ -95,7 +95,7 @@ for (const name of ['forest-road-ambush', 'riverside-ruin']) {
     // Every map layer is clipped to the map rect.
     const clip = [...svg.walk()].find(n => n.tagName === 'clipPath' && n.getAttribute('id') === `map-clip-${scene.grid.widthFt}x${scene.grid.heightFt}`);
     assert.equal(clip.children[0].getAttribute('width'), String(scene.grid.widthFt));
-    for (const k of kids.slice(1)) assert.equal(k.getAttribute('clip-path'), `url(#${clip.getAttribute('id')})`);
+    for (const k of kids.slice(1)) if (k.getAttribute('data-layer') !== 'lighting') assert.equal(k.getAttribute('clip-path'), `url(#${clip.getAttribute('id')})`);
     // Within a layer: regions, paths, objects, labels.
     const ground = kids.find(k => k.getAttribute('data-layer') === 'ground').children.map(g => g.getAttribute('data-id'));
     const order = [...scene.regions, ...scene.paths, ...scene.objects, ...scene.labels].filter(e => e.layer === 'ground').map(e => e.id);

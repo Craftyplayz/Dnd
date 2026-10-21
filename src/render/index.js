@@ -115,10 +115,12 @@ export function renderScene(scene, opts = {}) {
   for (const name of LAYER_ORDER) {
     if (!vis[name]) continue;
     const g = name === 'terrain' ? renderTerrain(scene, ctx)
-      : name === 'lighting' ? renderLighting(scene, doc)
+      : name === 'lighting' ? renderLighting(scene, doc, clipId)
       : name === 'grid' ? renderGrid(scene, doc)
       : h('g', { 'data-layer': name }, buckets[name].map(el => renderElement(el, ctx, !!opts.interactive)), doc);
-    g.setAttribute('clip-path', `url(#${clipId})`);
+    // A clipped group is isolated, which would stop the lighting blend modes from reaching the map below;
+    // lighting clips its own shapes instead.
+    if (name !== 'lighting') g.setAttribute('clip-path', `url(#${clipId})`);
     svg.appendChild(g);
   }
   return svg;

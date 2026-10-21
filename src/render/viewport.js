@@ -23,7 +23,7 @@ export function mountView(container, bus) {
   const clip = mapClip(doc, 'map-clip-view', 1, 1);
   defs.appendChild(clip);
   for (const name of LAYER_ORDER) {
-    const g = h('g', { 'data-layer': name, 'pointer-events': ELEMENT_LAYERS.includes(name) ? null : 'none', 'clip-path': 'url(#map-clip-view)' }, [], doc);
+    const g = h('g', { 'data-layer': name, 'pointer-events': ELEMENT_LAYERS.includes(name) ? null : 'none', 'clip-path': name === 'lighting' ? null : 'url(#map-clip-view)' }, [], doc);
     groups[name] = g;
     svg.appendChild(g);
   }
@@ -86,7 +86,7 @@ export function mountView(container, bus) {
     const tk = JSON.stringify([scene.terrain, W, H, scene.seed]);
     if (tk !== keys.terrain) { keys.terrain = tk; replaceKids(groups.terrain, renderTerrain(scene, ctx)); }
     const lk = JSON.stringify([scene.lighting, litFires(scene), W, H]);
-    if (lk !== keys.lighting) { keys.lighting = lk; replaceKids(groups.lighting, renderLighting(scene, doc)); }
+    if (lk !== keys.lighting) { keys.lighting = lk; replaceKids(groups.lighting, renderLighting(scene, doc, 'map-clip-view')); }
     const gk = JSON.stringify(scene.grid);
     if (gk !== keys.grid) { keys.grid = gk; replaceKids(groups.grid, renderGrid(scene, doc)); }
 

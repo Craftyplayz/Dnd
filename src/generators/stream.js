@@ -2,12 +2,14 @@
 // with a foam line at the edge, flow ripples and the odd stone in shallow water.
 import { h } from '../core/svg.js';
 import { PALETTE as C, mix } from '../render/palette.js';
-import { D, wobble, bboxOf, grow, cumLengths, at, surfaceFilter, blurFilter, strokeBatch, batchPaths, pebble, litDir, n2 } from '../render/paint.js';
+import { D, wobble, bboxOf, grow, cumLengths, at, surfaceFilter, blurFilter, sheenFilter, strokeBatch, batchPaths, pebble, litDir, n2 } from '../render/paint.js';
 
 export const WATER = {
-  shallow: mix(C.water[1], C.sand[0], 0.42),
-  mid: C.water[1],
-  deep: C.water[0],
+  shallow: mix('#3f8580', C.sand[0], 0.25),
+  mid: '#2a6b76',
+  deep: '#163d4b',
+  abyss: '#0d2733',
+  sheen: '#e8f6f2',
   foam: '#cfdcd2',
   ripple: '#dbe9e4',
 };
@@ -29,6 +31,7 @@ export default {
       surfaceFilter(doc, id('bank'), box, { seed: el.seed, rough, roughFreq: 0.12, mottle: 0.25, mottleFreq: 0.1, blur: 0.35 }),
       surfaceFilter(doc, id('water'), box, { seed: el.seed, rough: rough * 0.8, roughFreq: 0.12, mottle: 0.12, mottleFreq: 0.05, feather: 0.25 }),
       blurFilter(doc, id('chan'), box, Math.max(0.4, w * 0.13)),
+      sheenFilter(doc, id('sheen'), box, el.seed, 0.55),
       blurFilter(doc, id('soft'), box, 0.06),
       blurFilter(doc, id('sky'), box, Math.max(0.25, w * 0.04)),
     ];
@@ -51,7 +54,8 @@ export default {
       stroke(Math.max(0.5, w - 0.6), 'url(#p-water-shallow)', { opacity: 0.55 }),
       stroke(w * (deep ? 0.78 : 0.5), deep ? WATER.deep : WATER.mid, { opacity: deep ? 0.95 : 0.75, filter: `url(#${id('chan')})` }),
     ];
-    if (deep) water.push(stroke(w * 0.35, '#10262e', { opacity: 0.6, filter: `url(#${id('chan')})` }));
+    if (deep) water.push(stroke(w * 0.35, WATER.abyss, { opacity: 0.7, filter: `url(#${id('chan')})` }));
+    water.push(stroke(Math.max(0.4, w - 1), WATER.sheen, { opacity: deep ? 0.1 : 0.15, filter: `url(#${id('sheen')})` }));
     kids.push(h('g', { filter: `url(#${id('water')})` }, water, doc));
     // Ripples follow the flow (first -> last point); shallow water gets more riffles and stones.
     const rr = rng.fork('ripples'), rb = strokeBatch();

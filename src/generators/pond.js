@@ -2,7 +2,7 @@
 // lily pads in shallow water, and reed clumps along the shore.
 import { h } from '../core/svg.js';
 import { PALETTE as C, jitter } from '../render/palette.js';
-import { D, wobble, bboxOf, grow, cumLengths, at, surfaceFilter, blurFilter, strokeBatch, batchPaths, bladeD, pebble, litDir, scatter, n2, noise1 } from '../render/paint.js';
+import { D, wobble, bboxOf, grow, cumLengths, at, surfaceFilter, blurFilter, sheenFilter, strokeBatch, batchPaths, bladeD, pebble, litDir, scatter, n2, noise1 } from '../render/paint.js';
 import { WATER } from './stream.js';
 
 export default {
@@ -22,6 +22,7 @@ export default {
       surfaceFilter(doc, id('water'), box, { seed: el.seed, rough: 1.3, roughFreq: 0.12, mottle: 0.12, mottleFreq: 0.05, feather: 0.25 }),
       blurFilter(doc, id('depth'), box, m * 0.11),
       blurFilter(doc, id('soft'), box, 0.06),
+      sheenFilter(doc, id('sheen'), box, el.seed, 0.55),
       h('clipPath', { id: id('clip') }, [h('path', { d }, [], doc)], doc),
     ];
     const path = (attrs) => h('path', { d, 'stroke-linejoin': 'round', ...attrs }, [], doc);
@@ -39,12 +40,15 @@ export default {
     // Water: deep fill, blurred shallow rim stroke clipped to the shore (works for any concave outline).
     kids.push(h('g', { filter: `url(#${id('water')})` }, [
       path({ fill: WATER.foam, stroke: WATER.foam, 'stroke-width': 0.5, opacity: 0.9 }),
-      path({ fill: deep ? WATER.deep : WATER.mid }),
+      path({ fill: deep ? WATER.abyss : WATER.mid }),
       h('g', { 'clip-path': `url(#${id('clip')})` }, [
-        path({ fill: 'none', stroke: WATER.shallow, 'stroke-width': m * (deep ? 0.32 : 0.6), filter: `url(#${id('depth')})` }),
+        deep ? path({ fill: 'none', stroke: WATER.deep, 'stroke-width': m * 0.75, filter: `url(#${id('depth')})` }) : null,
+        path({ fill: 'none', stroke: WATER.shallow, 'stroke-width': m * (deep ? 0.32 : 0.38), filter: `url(#${id('depth')})` }),
         path({ fill: 'none', stroke: WATER.foam, 'stroke-width': 0.7, opacity: 0.6 }),
       ], doc),
       path({ fill: `url(#${deep ? 'p-water-deep' : 'p-water-shallow'})`, opacity: 0.35 }),
+      // Caustic sheen over the whole surface.
+      path({ fill: WATER.sheen, opacity: deep ? 0.09 : 0.12, filter: `url(#${id('sheen')})` }),
       // Sky reflection: a soft bright patch toward the shadow-side shore (the far bank mirrors the sky).
       h('g', { 'clip-path': `url(#${id('clip')})` }, [h('ellipse', { cx: n2(bb.x + bb.w / 2 - lit[0] * bb.w * 0.22), cy: n2(bb.y + bb.h / 2 - lit[1] * bb.h * 0.22), rx: n2(bb.w * 0.28), ry: n2(bb.h * 0.2), fill: '#e8f2f0', opacity: 0.12, filter: `url(#${id('depth')})` }, [], doc)], doc),
     ], doc));

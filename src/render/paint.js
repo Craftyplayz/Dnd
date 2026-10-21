@@ -214,6 +214,13 @@ export function surfaceFilter(doc, id, box, { seed = 1, rough = 0, roughFreq = 0
   return filterEl(doc, id, box, P);
 }
 
+// Water surface sheen: thin bright caustic veins where |noise| is near zero, kept inside the source shape.
+export const sheenFilter = (doc, id, box, seed, freq = 0.45) => filterEl(doc, id, box, [
+  h('feTurbulence', { type: 'turbulence', baseFrequency: freq, numOctaves: 2, seed: seed % 9973, result: 'n' }, [], doc),
+  h('feColorMatrix', { in: 'n', type: 'matrix', values: '0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 -7 0 0 0 1', result: 'v' }, [], doc),
+  h('feComposite', { in: 'v', in2: 'SourceAlpha', operator: 'in' }, [], doc),
+]);
+
 export const blurFilter = (doc, id, box, sd) => filterEl(doc, id, box, [h('feGaussianBlur', { stdDeviation: sd }, [], doc)]);
 
 // Collect many small marks into one <path> per tone (keeps the DOM small).
