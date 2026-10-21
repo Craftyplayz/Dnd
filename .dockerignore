@@ -1,0 +1,21 @@
+# Keep the build context to what the Dockerfile copies.
+.git
+.gitignore
+.env
+.env.*
+data/
+dist/
+docs/
+tests/
+node_modules/
+test-results/
+playwright-report/
+**/__pycache__/
+**/*.pyc
+.claude/
+.vscode/
+.idea/
+README.md
+docker-compose.yml
+Dockerfile
+.dockerignore

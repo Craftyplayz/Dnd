@@ -1,0 +1,23 @@
+services:
+  battle-map-studio:
+    build: .
+    image: battle-map-studio:latest
+    ports:
+      - "${HOST_PORT:-8080}:8080"
+    env_file: .env
+    # Fixed inside the container; these override any PORT / DATA_DIR in .env (meant for local runs).
+    environment:
+      PORT: "8080"
+      DATA_DIR: /data
+    volumes:
+      - bms-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+volumes:
+  bms-data:

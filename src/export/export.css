@@ -1,0 +1,32 @@
+/* Export bar (src/export/index.js). base.css tokens only. */
+.export-bar .export-btn { white-space: nowrap; }
+
+.export-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+/* Reserve the space while idle so the buttons do not shift when an export starts. */
+.export-status[hidden] { display: flex; visibility: hidden; }
+.export-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.export-progress {
+  appearance: none;
+  width: 140px;
+  height: 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  overflow: hidden;
+}
+.export-progress::-webkit-progress-bar { background: var(--bg); }
+.export-progress::-webkit-progress-value { background: var(--accent); }
+.export-progress::-moz-progress-bar { background: var(--accent); }
+
+@media (max-width: 900px) {
+  .export-bar { overflow-x: auto; justify-content: flex-start; }
+  .export-status { display: none; }
+}
