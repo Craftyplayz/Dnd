@@ -25,7 +25,8 @@ const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 // Resolve tokens to [parent container, key]. Collection id tokens become numeric indices.
 function resolve(doc, tokens, op) {
   if (!tokens.length || tokens[0] === '') throw new Error('cannot target the scene root');
-  if (!(tokens[0] in doc)) throw new Error(`unknown top-level key "${tokens[0]}"`);
+  if (tokens.includes('__proto__')) throw new Error('"__proto__" is not a valid key');
+  if (!Object.hasOwn(doc, tokens[0])) throw new Error(`unknown top-level key "${tokens[0]}"`);
   let parent = doc, key = tokens[0];
   for (let i = 1; i < tokens.length; i++) {
     let node = parent[key];

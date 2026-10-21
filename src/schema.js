@@ -3,7 +3,8 @@
 import SCHEMA from '../schema.json' with { type: 'json' };
 
 export { SCHEMA };
-export const TYPES = SCHEMA['x-elementTypes'];
+// Null-prototype so lookups like TYPES['constructor'] miss, matching Python dict semantics.
+export const TYPES = Object.assign(Object.create(null), SCHEMA['x-elementTypes']);
 export const LAYERS = ['ground', 'low', 'objects', 'canopy', 'labels'];
 // Toggleable in the layer panel; 'terrain', 'grid' and 'lighting' are not element layers.
 export const VIEW_LAYERS = ['terrain', ...LAYERS, 'grid', 'lighting'];
@@ -149,10 +150,10 @@ export function validateAgainst(schema, value, path = '', root = SCHEMA, errors 
     if (schema.items) value.forEach((v, i) => validateAgainst(schema.items, v, `${path}/${i}`, root, errors));
   }
   if (typeOk('object', value)) {
-    for (const k of schema.required || []) if (!(k in value)) err(`missing required property "${k}"`);
+    for (const k of schema.required || []) if (!Object.hasOwn(value, k)) err(`missing required property "${k}"`);
     const props = schema.properties || {};
     for (const [k, v] of Object.entries(value)) {
-      if (props[k]) validateAgainst(props[k], v, `${path}/${k}`, root, errors);
+      if (Object.hasOwn(props, k)) validateAgainst(props[k], v, `${path}/${k}`, root, errors);
       else if (schema.additionalProperties === false) err(`unknown property "${k}"`);
       else if (typeof schema.additionalProperties === 'object') validateAgainst(schema.additionalProperties, v, `${path}/${k}`, root, errors);
     }

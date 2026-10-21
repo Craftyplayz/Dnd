@@ -239,6 +239,7 @@ Bus events (payloads exact):
 | `busy` | `{busy: bool, label}` | editor / export |
 | `status` | `{level: 'info'|'ok'|'warn'|'error', message}` | anyone; editor shows toasts in `#toasts` |
 | `scene:saved` | `{id, updatedAt}` | editor |
+| `scenes:refresh` | `{}` | main.js (library changed outside the editor) |
 
 `initEditor({ store, view, bus, api, layout, dom })` (`src/editor/index.js`, agent 3), `dom = { topbar, map, sidepanel, toasts }` → `{ select(ids), getSelection(), setTool(name) }`. Editor responsibilities:
 
