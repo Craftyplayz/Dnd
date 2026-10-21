@@ -131,17 +131,55 @@ const satisfied = (scene, c) => {
 
 // Relaxation: repeat passes so chains (b of one is a of another) settle. Returns report items for
 // elements that are b of several constraints that could not all be met (over-constrained).
-function solveConstraints(scene, fps, moved) {
+// Features that belong to a path/region b and must move with it: bridges and props sitting on it
+// (allowed there by the collision rules), and ground/vegetation/water regions hugging it (banks, reeds).
+const ATTACH_BAND_FT = 12;
+function attachmentsOf(scene, b, fps, skip) {
+  const bs = shapeOf(b), band = bs.r + ATTACH_BAND_FT, cat = def(b).cat;
+  const near = ([x, y]) => coreDistance(pointShape(x, y), { ...bs, r: 0 }) <= band;
+  const out = [];
+  for (const e of allElements(scene)) {
+    if (e === b || skip.has(e.id) || e.locked) continue;
+    const d = def(e);
+    if (d.kind === 'region' && ['veg', 'ground', 'water'].includes(d.cat)) {
+      const pts = shapeOf(e).pts, frac = pts.filter(near).length / pts.length;
+      if (frac >= 0.5 || (frac >= 0.25 && overlaps(shapeOf(e), bs))) out.push(e);
+    } else if (d.kind === 'object' && cat !== 'veg' && cat !== 'ground' && !blocks(e, b) && overlaps(fps.get(e).fp, bs)) {
+      out.push(e);
+    }
+  }
+  return out;
+}
+
+function solveConstraints(scene, fps, moved, pinned) {
   const asB = new Map();
   for (const c of scene.constraints) asB.set(c.b, [...(asB.get(c.b) || []), c]);
   const start = new Map([...asB.keys()].map(id => [id, findElement(scene, id)?.el]).filter(([, e]) => e).map(([id, e]) => [id, { ...e.position }]));
+  const skip = new Set(scene.constraints.flatMap(c => [c.a, c.b]));
+  const attached = new Map(); // b id -> elements (decided before anything moves; first b wins)
+  for (const id of asB.keys()) {
+    const b = findElement(scene, id)?.el;
+    if (!b || isObject(b) || def(b).kind === 'label') continue;
+    const list = attachmentsOf(scene, b, fps, skip);
+    list.forEach(e => skip.add(e.id));
+    attached.set(id, list);
+  }
   for (let pass = 0; pass < RELAX_PASSES; pass++) {
     for (const c of scene.constraints) solveConstraint(scene, c, fps, asB.get(c.b).length === 1);
     if (scene.constraints.every(c => satisfied(scene, c))) break;
   }
   for (const [id, from] of start) {
     const to = findElement(scene, id).el.position;
-    if (to.x !== from.x || to.y !== from.y) moved.push({ id, from, to: { ...to }, reason: `constraint ${asB.get(id).map(c => c.id).join(',')}` });
+    if (to.x === from.x && to.y === from.y) continue;
+    moved.push({ id, from, to: { ...to }, reason: `constraint ${asB.get(id).map(c => c.id).join(',')}` });
+    const dx = to.x - from.x, dy = to.y - from.y;
+    for (const e of attached.get(id) || []) {
+      const f = { ...e.position };
+      e.position = { x: r3(f.x + dx), y: r3(f.y + dy) };
+      fps.forget(e);
+      pinned.add(e.id);
+      moved.push({ id: e.id, from: f, to: { ...e.position }, reason: 'attached', with: id });
+    }
   }
   const items = [];
   for (const [id, cs] of asB) {
@@ -169,24 +207,42 @@ function collidesWithAny(el, all, fps, self = el) {
   for (const o of all) {
     if (o === self || !blocks(el, o)) continue;
     const other = fps.get(o);
-    if (boxesNear(box, other.box) && overlaps(fp, other.fp)) return true;
+    if (boxesNear(box, other.box) && overlaps(fp, other.fp)) return o;
   }
-  return false;
+  return null;
 }
 
-function resolveCollisions(scene, fps, moved) {
+// Water, walls and cliffs: a collision fix must not carry an object across one of these.
+function barriersOf(scene) {
+  return allElements(scene).filter(e => { const c = def(e).cat; return (c === 'water' || c === 'wall') && def(e).kind !== 'object'; })
+    .map(e => (def(e).kind === 'path' ? { line: shapeOf(e, { center: true }) } : { poly: shapeOf(e) }));
+}
+
+function crossesBarrier(barriers, [x0, y0], [x1, y1]) {
+  const seg = { core: 'line', pts: [[x0, y0], [x1, y1]], r: 0 };
+  return barriers.some(b => {
+    if (b.line) return coreDistance(seg, b.line) < 1e-9;
+    if (pointInPoly([x0, y0], b.poly.pts)) return false; // starting inside: any way out is fine
+    return coreDistance(seg, b.poly) < 1e-9;
+  });
+}
+
+function resolveCollisions(scene, fps, moved, extraPinned = new Set()) {
   const W = scene.grid.widthFt, H = scene.grid.heightFt;
-  const pinned = new Set();
+  const barriers = barriersOf(scene);
+  const pinned = new Set(extraPinned);
   for (const c of scene.constraints) { pinned.add(c.a); pinned.add(c.b); }
   const all = allElements(scene);
   for (const el of all) if (el.locked || !isObject(el)) pinned.add(el.id);
   // An object yields to pinned elements and to earlier objects; later ones yield to it when their turn comes.
   const settled = all.filter(e => pinned.has(e.id));
   for (const el of scene.objects) {
-    if (pinned.has(el.id) || !collidesWithAny(el, settled, fps)) { if (!pinned.has(el.id)) settled.push(el); continue; }
+    const blocker = pinned.has(el.id) ? null : collidesWithAny(el, settled, fps);
+    if (!blocker) { if (!pinned.has(el.id)) settled.push(el); continue; }
     settled.push(el);
     const { x, y } = el.position;
     for (const s of SPIRAL) {
+      if (crossesBarrier(barriers, [x, y], [x + s.dx, y + s.dy])) continue;
       const cand = moveTo(el, x + s.dx, y + s.dy);
       if (!insideMap(fps.get(cand).box, W, H)) { fps.forget(cand); continue; }
       const hit = collidesWithAny(cand, all, fps, el);
@@ -194,7 +250,7 @@ function resolveCollisions(scene, fps, moved) {
       if (hit) continue;
       el.position = { ...cand.position };
       fps.forget(el);
-      moved.push({ id: el.id, from: { x, y }, to: { ...el.position }, reason: 'collision' });
+      moved.push({ id: el.id, from: { x, y }, to: { ...el.position }, reason: 'collision', with: blocker.id });
       break;
     }
   }
@@ -272,13 +328,20 @@ function bridgeItems(scene, fps) {
   for (const b of bridges) {
     if (!water.some(w => overlaps(fps.get(b).fp, shapeOf(w)))) items.push({ level: 'warn', kind: 'bridge', ids: [b.id], message: `${nameOf(b)} does not cross any water` });
   }
-  // shortcut: one bridge on both the road and the water passes every crossing of that pair; upgrade if roads cross a river twice.
+  // A road crosses water where its centreline is wet; every wet sample (1 ft apart) must be on a bridge deck.
   for (const road of scene.paths.filter(e => e.type === 'road')) {
-    const rs = shapeOf(road);
+    const line = shapeOf(road, { center: true });
+    const segs = line.pts.slice(1).map((p, i) => [line.pts[i], p]);
+    if (line.closed && line.pts.length > 2) segs.push([line.pts[line.pts.length - 1], line.pts[0]]);
+    const samples = segs.flatMap(([a, b]) => {
+      const n = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1])));
+      return Array.from({ length: n + 1 }, (_, i) => [a[0] + ((b[0] - a[0]) * i) / n, a[1] + ((b[1] - a[1]) * i) / n]);
+    });
     for (const w of water) {
       const ws = shapeOf(w);
-      if (!overlaps(rs, ws)) continue;
-      if (!bridges.some(b => overlaps(fps.get(b).fp, rs) && overlaps(fps.get(b).fp, ws))) {
+      const wet = ([x, y]) => (ws.core === 'poly' ? pointInPoly([x, y], ws.pts) : coreDistance(pointShape(x, y), ws) < ws.r);
+      const onBridge = ([x, y]) => bridges.some(b => gap(pointShape(x, y), fps.get(b).fp) <= 0.01);
+      if (samples.some(p => wet(p) && !onBridge(p))) {
         items.push({ level: 'warn', kind: 'bridge', ids: [road.id, w.id], message: `${nameOf(road)} crosses ${nameOf(w)} with no bridge` });
       }
     }
@@ -354,9 +417,21 @@ function coverPct(scene, grid) {
   return open ? r1((100 * covered) / open) : 0;
 }
 
+function movedItems(scene, moved) {
+  const nm = id => { const e = findElement(scene, id)?.el; return e ? nameOf(e) : id; };
+  return moved.map(m => {
+    const ft = Math.hypot(m.to.x - m.from.x, m.to.y - m.from.y).toFixed(1);
+    const why = m.reason === 'collision' ? `to clear a collision with ${nm(m.with)}`
+      : m.reason === 'bounds' ? 'back inside the map'
+      : m.reason === 'attached' ? `with ${nm(m.with)}`
+      : `to keep ${scene.constraints.filter(c => m.reason.split(/[ ,]/).includes(c.id)).map(c => c.text || c.id).join('; ')}`;
+    return { level: 'warn', kind: 'moved', ids: [m.id], message: `${nm(m.id)} moved ${ft} ft ${why}` };
+  });
+}
+
 function buildReport(scene, fps, moved, extra = []) {
   const all = allElements(scene);
-  const items = [...constraintItems(scene), ...extra, ...pairItems(all, fps), ...boundsAndSizeItems(scene, fps), ...bridgeItems(scene, fps)];
+  const items = [...constraintItems(scene), ...extra, ...movedItems(scene, moved), ...pairItems(all, fps), ...boundsAndSizeItems(scene, fps), ...bridgeItems(scene, fps)];
   const grid = blockedGrid(scene, fps);
   const lanes = { westEast: hasRoute(grid, true), northSouth: hasRoute(grid, false) };
   items.push(lanes.westEast
@@ -378,9 +453,10 @@ export function layoutScene(input, { fix = true } = {}) {
   const moved = [];
   if (!fix) return { scene, report: buildReport(scene, fps, moved) };
   clampToMap(scene, fps, moved);
-  const extra = solveConstraints(scene, fps, moved);
+  const attachedPinned = new Set();
+  const extra = solveConstraints(scene, fps, moved, attachedPinned);
   clampToMap(scene, fps, moved); // a solved b may have left the map; the broken constraint is then reported
-  resolveCollisions(scene, fps, moved);
+  resolveCollisions(scene, fps, moved, attachedPinned);
   const report = buildReport(scene, fps, moved, extra);
   // Never hand back a scene the validator rejects: keep the input instead and say why.
   const check = validateScene(scene);

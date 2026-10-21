@@ -795,11 +795,21 @@ class RequestHardeningTest(Base):
                 st, hd, _ = self.srv.request(m, '/')
                 self.assertEqual((st, hd['location']), (302, '/login'))
                 st, hd, js = self.api(m, '/api/scenes')
-                self.assertEqual(st, 405)
-                if m != 'HEAD':
-                    self.assertEqual(js['error']['code'], 'method_not_allowed')
+                if m == 'HEAD':  # same as GET, no body
+                    self.assertEqual((st, js), (200, ''))
+                else:
+                    self.assertEqual((st, js['error']['code']), (405, 'method_not_allowed'))
                 self.assertEqual(hd['x-frame-options'], 'DENY')
         self.assertEqual(self.api('GET', '/api/session')[0], 200)
+
+    def test_head_follows_get_rules(self):
+        for path in ('/healthz', '/login'):
+            st, hd, body = self.srv.request('HEAD', path)
+            self.assertEqual((st, body), (200, ''), path)
+            self.assertEqual(hd['content-length'], self.srv.request('GET', path)[1]['content-length'])
+        st, hd, _ = self.api('HEAD', '/login')
+        self.assertEqual((st, hd['location']), (302, '/'))
+        self.assertEqual(self.api('GET', '/api/session')[0], 200)  # connection still in sync
 
 
 class ConnectionCapTest(Base):

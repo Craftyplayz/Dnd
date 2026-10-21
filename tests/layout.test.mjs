@@ -279,3 +279,68 @@ test('D2: stated direction puts b on the line through a; chains converge; over-c
   assert.ok(r.items.some(i => i.kind === 'constraint' && /over-constrained/.test(i.message)));
   assert.equal(JSON.stringify(layoutScene(bad)), JSON.stringify(layoutScene(bad))); // deterministic
 });
+
+// ---- QA N1 / N1b: attached features follow a moved path; every move is reported; no barrier crossings
+const ford = () => blank({
+  grid: { cellFt: 5, widthFt: 120, heightFt: 100, visible: true },
+  objects: [obj('tower', 'building', 30, 20, 15, 15, { params: { shape: 'round', style: 'watchtower' } }),
+    obj('bridge', 'bridge', 72.5, 60, 18, 13), obj('wagon', 'wagon', 100, 60, 10, 5)],
+  paths: [
+    { id: 'river', type: 'stream', name: 'River', position: { x: 0, y: 0 }, params: { points: [[72.5, 0], [72.5, 100]], width: 10 } },
+    { id: 'road', type: 'road', name: 'Road', position: { x: 0, y: 0 }, params: { points: [[0, 60], [120, 60]], width: 12 } },
+  ],
+  regions: [{ id: 'reeds', type: 'tall-grass', name: 'Reeds', position: { x: 0, y: 0 }, params: { points: [[61, 5], [66, 5], [66, 40], [61, 40]] } }],
+  constraints: [{ id: 'c1', kind: 'distance', a: 'tower', b: 'river', ft: 30, direction: 'east', text: 'river 30 ft east of the tower' }],
+});
+
+test('N1: bridge, bank regions and props follow a path b moved by the solver', () => {
+  const s = ford();
+  assert.ok(checkScene(s).ok);
+  el(s, 'tower').position.x -= 10;
+  const { scene, report } = layoutScene(s);
+  assert.ok(Math.abs(distanceFt(el(scene, 'tower'), el(scene, 'river')) - 30) <= 0.01);
+  assert.equal(el(scene, 'river').position.x, -10);
+  assert.deepEqual(el(scene, 'bridge').position, { x: 62.5, y: 60 });
+  assert.deepEqual(el(scene, 'reeds').position, { x: -10, y: 0 });
+  assert.deepEqual(el(scene, 'road').position, { x: 0, y: 0 });   // the road does not belong to the river
+  assert.deepEqual(el(scene, 'wagon').position, { x: 100, y: 60 });
+  assert.equal(kinds(report, 'bridge').length, 0, JSON.stringify(kinds(report, 'bridge')));
+  assert.ok(kinds(report, 'moved', 'warn').some(i => i.ids[0] === 'bridge' && i.message === 'bridge moved 10.0 ft with River'));
+  assert.ok(validate(scene).ok);
+});
+
+test('N1: props on a moved road travel with it', () => {
+  const s = blank({
+    objects: [obj('rock', 'boulder', 50, 20, 4, 4), obj('cart', 'wagon', 30, 60, 10, 5), obj('oak', 'tree', 80, 80, 16, 16)],
+    paths: [{ id: 'road', type: 'road', name: 'Road', position: { x: 0, y: 0 }, params: { points: [[0, 60], [100, 60]], width: 10 } }],
+    constraints: [{ id: 'c1', kind: 'distance', a: 'rock', b: 'road', ft: 30, direction: 'south' }],
+  });
+  const { scene } = layoutScene(s);
+  assert.equal(el(scene, 'road').position.y, el(scene, 'cart').position.y - 60);
+  assert.deepEqual(el(scene, 'oak').position, { x: 80, y: 80 });
+});
+
+test('N1: a road crossing water beside (not on) the bridge is flagged', () => {
+  const s = ford();
+  el(s, 'bridge').position.y = 72; // deck overlaps the road edge but not where the centreline is wet
+  assert.ok(kinds(checkScene(s), 'bridge', 'warn').some(i => i.ids.join() === 'road,river'));
+  assert.equal(kinds(checkScene(ford()), 'bridge').length, 0);
+});
+
+test('N1b: every move is a report item, and collision fixes never cross a wall', () => {
+  const s = ford();
+  s.objects.push(obj('rock', 'boulder', 100, 30, 4, 4), obj('rock-2', 'boulder', 101, 30, 4, 4));
+  const r = layoutScene(s).report;
+  assert.equal(r.moved.length, kinds(r, 'moved').length);
+  assert.match(kinds(r, 'moved').find(i => i.ids[0] === 'rock-2').message, /^rock-2 moved \d+\.\d ft to clear a collision with rock$/);
+  const walled = (withWall) => blank({
+    grid: { cellFt: 5, widthFt: 60, heightFt: 20, visible: true },
+    objects: [obj('house', 'building', 55.5, 10, 9, 20, { locked: true }), obj('b', 'boulder', 55, 10, 3, 3)],
+    paths: withWall ? [{ id: 'wall', type: 'ruined-wall', name: 'Wall', position: { x: 0, y: 0 }, params: { points: [[50, 0], [50, 20]], width: 1 } }] : [],
+  });
+  const free = layoutScene(walled(false));
+  assert.ok(el(free.scene, 'b').position.x < 51); // without the wall it escapes west
+  const blocked = layoutScene(walled(true));
+  assert.deepEqual(el(blocked.scene, 'b').position, { x: 55, y: 10 });
+  assert.ok(kinds(blocked.report, 'collision', 'error').length >= 1);
+});

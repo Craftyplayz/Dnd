@@ -1150,17 +1150,18 @@ class Handler(BaseHTTPRequestHandler):
         self._body_read = False
         self.head_only = method == 'HEAD'
         try:
-            public = (method, path) in (('GET', '/login'), ('POST', '/login'), ('GET', '/healthz'))
+            verb = 'GET' if method == 'HEAD' else method  # HEAD = GET without a body, same rules
+            public = (verb, path) in (('GET', '/login'), ('POST', '/login'), ('GET', '/healthz'))
             self.sid = session_from_header(self.headers.get('Cookie'))
             if not public and not self.sid:
                 if path.startswith('/api/'):
                     raise ApiError(401, 'unauthorized', 'Sign in required')
                 self.close_connection = method not in ('GET', 'HEAD')  # an unread body must not be parsed as the next request
                 return self.redirect('/login')
-            if method not in ('GET', 'POST', 'PUT', 'DELETE'):
+            if verb not in ('GET', 'POST', 'PUT', 'DELETE'):
                 raise ApiError(405, 'method_not_allowed', f'{method} is not supported')
             body = self.read_body() if method in ('POST', 'PUT', 'DELETE') else None
-            self.route(method, path, body)
+            self.route(verb, path, body)
         except ApiError as e:
             if method not in ('GET', 'HEAD') and not self._body_read:
                 self.close_connection = True
