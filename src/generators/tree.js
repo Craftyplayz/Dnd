@@ -1,5 +1,5 @@
 // Tree seen from above. size = canopy diameter. Species: oak, pine, birch, willow, dead.
-import { env, blobPts, smoothD, polyD, fmt, ramp, shade, jit, hsl, mix, clamp, buckets, lensD, circleD, TONES } from './_paint.js';
+import { env, blobPts, smoothD, fmt, ramp, shade, jit, hsl, clamp, buckets, lensD, circleD, lineD } from './_paint.js';
 import { paintFoliage } from './_foliage.js';
 
 export default {
@@ -39,7 +39,7 @@ function oak(E, rng, { R, ex, ey, shH }) {
     clumps.push({ x: Math.cos(a) * d * ex, y: Math.sin(a) * d * ey, r });
   }
   clumps.push({ x: C.range(-0.08, 0.08) * R, y: C.range(-0.08, 0.08) * R, r: R * C.range(0.3, 0.36) });
-  return paintFoliage(E, rng.fork('paint'), { clumps, tones, shadowH: shH, dabs: Math.round(R * 9), lobes: 9, depth: 0.1 });
+  return paintFoliage(E, rng.fork('paint'), { clumps, tones, shadowH: shH, dabs: Math.round(R * 8), lobes: 8, depth: 0.11 });
 }
 
 function birch(E, rng, { R, ex, ey, shH }) {
@@ -60,9 +60,9 @@ function birch(E, rng, { R, ex, ey, shH }) {
   }
   const clumps = [];
   const C = rng.fork('clumps');
-  const n = C.int(18, 23);
+  const n = C.int(13, 16);
   for (let i = 0; i < n; i++) {
-    const a = C.next() * Math.PI * 2, dist = R * Math.sqrt(C.range(0.02, 1)) * 0.76, r = R * C.range(0.19, 0.26);
+    const a = C.next() * Math.PI * 2, dist = R * Math.sqrt(C.range(0.02, 1)) * 0.74, r = R * C.range(0.22, 0.29);
     clumps.push({ x: Math.cos(a) * dist * ex, y: Math.sin(a) * dist * ey, r });
   }
   const branches = [
@@ -78,53 +78,54 @@ function birch(E, rng, { R, ex, ey, shH }) {
 
 function pine(E, rng, { R, ex, ey, shH }) {
   const P = E.pal('pine');
-  const tones = [jit(rng, P[0], 0.05), jit(rng, hsl(P[1], 0, 0, 0.03), 0.05), jit(rng, hsl(P[2], 0, 0.03, 0.1), 0.05)];
+  const tones = [jit(rng, P[0], 0.05), jit(rng, P[1], 0.05), jit(rng, hsl(P[2], 0, 0.02, 0.06), 0.05)];
   const kids = [];
-  // Rosette of pointed needle fronds in five tiers, outer tiers darker, lit side brighter.
-  const frond = (a, r0, r1, w) => {
-    const ca = Math.cos(a), sa = Math.sin(a), px = -sa, py = ca, bend = rng.range(-0.12, 0.12) * r1;
-    const tip = [ca * r1 + px * bend, sa * r1 + py * bend];
-    const b1 = [ca * r0 + px * w * 0.5, sa * r0 + py * w * 0.5], b2 = [ca * r0 - px * w * 0.5, sa * r0 - py * w * 0.5];
-    const m = (r0 + r1) * 0.5;
-    const c1 = [ca * m + px * w * 0.75, sa * m + py * w * 0.75], c2 = [ca * m - px * w * 0.75, sa * m - py * w * 0.75];
-    const S = ([x, y]) => `${fmt(x * ex)} ${fmt(y * ey)}`;
-    return { d: `M${S(b1)}Q${S(c1)} ${S(tip)}Q${S(c2)} ${S(b2)}Z`, mid: `M${S([ca * r0, sa * r0])}Q${S([ca * m + px * bend * 0.4, sa * m + py * bend * 0.4])} ${S([tip[0] * 0.96, tip[1] * 0.96])}` };
+  // A tier is a round crown ring with soft bumps (needle clusters) and a slightly ragged edge.
+  const tier = (r, n, cx, cy) => {
+    const pts = [], ph = rng.next() * Math.PI * 2, tips = [];
+    for (let i = 0; i < n * 2; i++) {
+      const a = ph + ((i + rng.range(-0.2, 0.2)) * Math.PI) / n;
+      const rr = r * (i % 2 ? rng.range(0.86, 0.97) : rng.range(0.93, 1.03));
+      pts.push([cx + Math.cos(a) * rr * ex, cy + Math.sin(a) * rr * ey]);
+      if (!(i % 2)) tips.push(a);
+    }
+    return { pts, tips };
   };
-  const tiers = 5, layers = [];
-  for (let k = 0; k < tiers; k++) {
-    const rk = R * (1 - k * 0.18), n = Math.max(7, Math.round((24 - k * 3.5) * rng.range(0.9, 1.1))), ph = rng.next() * Math.PI * 2;
-    const list = [];
-    for (let i = 0; i < n; i++) {
-      const a = ph + ((i + rng.range(-0.3, 0.3)) * 2 * Math.PI) / n;
-      const f = frond(a, rk * 0.12, rk * rng.range(0.86, 1), rk * rng.range(0.2, 0.28));
-      list.push({ ...f, lit: Math.cos(a) * E.lx + Math.sin(a) * E.ly });
-    }
-    layers.push(list);
+  const tiers = [];
+  for (let k = 0; k < 5; k++) {
+    const r = R * (1 - k * 0.19), sh = R * 0.035 * k;
+    tiers.push({ r, cx: E.lx * sh, cy: E.ly * sh, ...tier(r, Math.max(7, Math.round((21 - k * 3.2) * rng.range(0.9, 1.1))), E.lx * sh, E.ly * sh) });
   }
-  const silD = layers[0].map(f => f.d).join('') + circleD(0, 0, R * 0.72);
-  kids.push(E.shadowEl(silD, shH, { wide: true }));
+  const outD = smoothD(tiers[0].pts, true);
+  kids.push(E.shadowEl(outD, shH, { wide: true }));
   const rim = shade(tones[0], -0.35);
-  kids.push(E.path(silD, { fill: rim, stroke: rim, 'stroke-width': 0.4, 'stroke-linejoin': 'round' }));
-  layers.forEach((list, k) => {
-    const fill = buckets(), mids = [];
-    for (const f of list) {
-      const t = 0.05 + k * 0.2 + f.lit * 0.16 + rng.range(-0.03, 0.03);
-      fill.add(ramp(tones, Math.round(t * 20) / 20), f.d);
-      mids.push(f.mid);
+  kids.push(E.path(outD, { fill: rim, stroke: rim, 'stroke-width': 0.4, 'stroke-linejoin': 'round' }));
+  tiers.forEach((t, k) => {
+    const base = 0.04 + k * 0.17;
+    kids.push(E.path(smoothD(t.pts, true), { fill: ramp(tones, base), stroke: rim, 'stroke-width': fmt(R * 0.014), 'stroke-opacity': 0.35 }));
+    // lit crescent: the tier again, smaller and shifted toward the light
+    const sh = t.r * 0.1;
+    kids.push(E.path(smoothD(t.pts.map(([x, y]) => [t.cx + (x - t.cx) * 0.86 + E.lx * sh, t.cy + (y - t.cy) * 0.86 + E.ly * sh]), true), { fill: ramp(tones, base + 0.15) }));
+    if (k === 0) {
+      // faint radial branch structure under the upper tiers
+      let d = '';
+      for (const a of t.tips) if (rng.chance(0.5)) d += lineD(0, 0, Math.cos(a) * t.r * 0.8 * ex, Math.sin(a) * t.r * 0.8 * ey);
+      if (d) kids.push(E.path(d, { fill: 'none', stroke: rim, 'stroke-width': fmt(R * 0.03), opacity: 0.45, 'stroke-linecap': 'round' }));
     }
-    kids.push(...fill.nodes(E));
-    kids.push(E.path(mids.join(''), { fill: 'none', stroke: ramp(tones, 0.25 + k * 0.17), 'stroke-width': fmt(R * 0.02), opacity: 0.7, 'stroke-linecap': 'round' }));
+    // needle tufts at each bump: light on the lit side, dark on the far side
+    let lt = '', dk = '';
+    for (const a of t.tips) {
+      const lit = Math.cos(a) * E.lx + Math.sin(a) * E.ly;
+      if (Math.abs(lit) < 0.15) continue;
+      const r0 = t.r * rng.range(0.74, 0.82), b2 = a + rng.range(-0.06, 0.06);
+      const d = lineD(t.cx + Math.cos(a) * r0 * ex, t.cy + Math.sin(a) * r0 * ey, t.cx + Math.cos(b2) * t.r * 0.93 * ex, t.cy + Math.sin(b2) * t.r * 0.93 * ey);
+      if (lit > 0) lt += d; else dk += d;
+    }
+    const nw = fmt(R * 0.02);
+    if (dk) kids.push(E.path(dk, { fill: 'none', stroke: rim, 'stroke-width': nw, opacity: 0.35, 'stroke-linecap': 'round' }));
+    if (lt) kids.push(E.path(lt, { fill: 'none', stroke: shade(tones[2], 0.08 + k * 0.04), 'stroke-width': nw, opacity: 0.45, 'stroke-linecap': 'round' }));
   });
-  // needle glints on the lit side
-  const hi = buckets();
-  for (let i = 0; i < Math.round(R * 5); i++) {
-    const a = rng.next() * Math.PI * 2, r = R * (0.2 + 0.75 * Math.sqrt(rng.next()));
-    const lit = Math.cos(a) * E.lx + Math.sin(a) * E.ly;
-    if (lit < 0) continue;
-    hi.add(shade(tones[2], 0.12), lensD(Math.cos(a) * r * ex, Math.sin(a) * r * ey, R * 0.1, R * 0.015, a + rng.range(-0.25, 0.25)));
-  }
-  kids.push(...hi.nodes(E, fill => ({ fill, opacity: 0.6 })));
-  kids.push(E.path(circleD(E.lx * R * 0.05, E.ly * R * 0.05, R * 0.06), { fill: shade(tones[2], 0.1), opacity: 0.8 }));
+  kids.push(E.path(circleD(E.lx * R * 0.16, E.ly * R * 0.16, R * 0.07), { fill: shade(tones[2], 0.12), opacity: 0.85 }));
   return kids;
 }
 

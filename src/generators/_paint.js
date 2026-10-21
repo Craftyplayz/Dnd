@@ -1,9 +1,29 @@
 // Shared painting helpers for the object generators (underscore prefix: helper, not a type).
 // Colour maths, lighting in the element's local frame, shape builders, fill buckets, clipping
 // and a polyline walker. Everything is pure and deterministic.
-import { h, fmt, smoothD, polyD } from '../core/svg.js';
+import { h, fmt } from '../core/svg.js';
 
-export { fmt, smoothD, polyD };
+export { fmt };
+
+// Path data at 0.01 ft (0.6 px at print scale): ~25% smaller SVG than 3 decimals, no visible loss.
+const f2 = v => Math.round(v * 100) / 100;
+export function polyD(pts, closed = false) {
+  if (!pts.length) return '';
+  return 'M' + pts.map(p => `${f2(p[0])} ${f2(p[1])}`).join('L') + (closed ? 'Z' : '');
+}
+// Catmull-Rom spline as cubic Beziers (same as core smoothD, coarser number format).
+export function smoothD(pts, closed = false, tension = 0.5) {
+  const n = pts.length;
+  if (n < 3) return polyD(pts, closed);
+  const P = i => (closed ? pts[(i + n) % n] : pts[Math.max(0, Math.min(n - 1, i))]);
+  const k = tension / 3;
+  let d = `M${f2(pts[0][0])} ${f2(pts[0][1])}`;
+  for (let i = 0, segs = closed ? n : n - 1; i < segs; i++) {
+    const p0 = P(i - 1), p1 = P(i), p2 = P(i + 1), p3 = P(i + 2);
+    d += `C${f2(p1[0] + (p2[0] - p0[0]) * k)} ${f2(p1[1] + (p2[1] - p0[1]) * k)} ${f2(p2[0] - (p3[0] - p1[0]) * k)} ${f2(p2[1] - (p3[1] - p1[1]) * k)} ${f2(p2[0])} ${f2(p2[1])}`;
+  }
+  return d + (closed ? 'Z' : '');
+}
 
 // Used only when ctx.palette (src/render/palette.js) is missing a key.
 const FALLBACK = {
@@ -158,12 +178,12 @@ export const rectD = (cx, cy, w, hh, ang = 0) => polyD(rectPts(cx, cy, w, hh, an
 
 // Leaf / dab: a lens of length len and width wid at angle ang (radians).
 export function lensD(x, y, len, wid, ang) {
-  const c = Math.cos(ang), s = Math.sin(ang);
+  const fmt = f2, c = Math.cos(ang), s = Math.sin(ang);
   const ax = x - (c * len) / 2, ay = y - (s * len) / 2, bx = x + (c * len) / 2, by = y + (s * len) / 2;
   const nx = -s * wid, ny = c * wid;
   return `M${fmt(ax)} ${fmt(ay)}Q${fmt(x + nx)} ${fmt(y + ny)} ${fmt(bx)} ${fmt(by)}Q${fmt(x - nx)} ${fmt(y - ny)} ${fmt(ax)} ${fmt(ay)}Z`;
 }
-export const lineD = (x1, y1, x2, y2) => `M${fmt(x1)} ${fmt(y1)}L${fmt(x2)} ${fmt(y2)}`;
+export const lineD = (x1, y1, x2, y2) => `M${f2(x1)} ${f2(y1)}L${f2(x2)} ${f2(y2)}`;
 
 export const scalePts = (pts, k, cx = 0, cy = 0, dx = 0, dy = 0) => pts.map(([x, y]) => [cx + (x - cx) * k + dx, cy + (y - cy) * k + dy]);
 export const centroid = pts => [pts.reduce((s, p) => s + p[0], 0) / pts.length, pts.reduce((s, p) => s + p[1], 0) / pts.length];

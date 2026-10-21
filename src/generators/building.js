@@ -427,7 +427,7 @@ function tileFace(E, R, f, kind, T, out) {
       while (u <= u1 + 0.5) { pts.push(P(u, vb - R.range(0, 0.25))); u += 0.5; }
       for (let i = 0; i < pts.length - 1; i++) { const sg = clipSeg(pts[i], pts[i + 1], f.poly); if (sg) d += polyD(sg); }
       out.lines.push(d);
-      for (let k = 0; k < (u1 - u0) * 4.5; k++) {
+      for (let k = 0; k < (u1 - u0) * 3.2; k++) {
         const uu = R.range(u0, u1), vv = R.range(va, vb);
         const sg = clipSeg(P(uu, vv), P(uu + R.range(-0.08, 0.08), vv + R.range(0.4, 0.8)), f.poly);
         if (sg) (R.chance(0.5) ? out.straw : out.strawDark).push(polyD(sg));

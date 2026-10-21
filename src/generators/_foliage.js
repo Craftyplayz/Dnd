@@ -19,8 +19,8 @@ export function paintFoliage(E, rng, { clumps, tones, shadowH = 2, dabs = 30, da
   const allD = shapes.map(s => smoothD(s.pts, true)).join('');
   const rim = shade(tones[0], -0.3);
   const kids = [E.shadowEl(allD, shadowH, { wide: true }), ...under];
-  kids.push(E.path(allD, { fill: rim, stroke: rim, 'stroke-width': fmt(rimFt * 2), 'stroke-linejoin': 'round' }));
-  kids.push(E.path(allD, { fill: tones[0] }));
+  // Rim and base in one path: interior stroke parts are covered by the clump layers drawn next.
+  kids.push(E.path(allD, { fill: tones[0], stroke: rim, 'stroke-width': fmt(rimFt * 2), 'stroke-linejoin': 'round' }));
   const ext = Math.max(...shapes.map(s => Math.hypot(s.x, s.y) + s.r), 1e-3);
   const order = shapes.map((s, i) => [Math.hypot(s.x, s.y) + rng.range(0, 0.25) * s.r, i]).sort((a, b) => b[0] - a[0]).map(a => a[1]);
   const c = contrast;
@@ -29,10 +29,9 @@ export function paintFoliage(E, rng, { clumps, tones, shadowH = 2, dabs = 30, da
     const lf = clamp((s.x * E.lx + s.y * E.ly) / ext, -1, 1);
     const off = (k, sc) => s.pts.map(([x, y]) => [s.x + (x - s.x) * sc + E.lx * s.r * k, s.y + (y - s.y) * sc + E.ly * s.r * k]);
     const j = rng.range(-0.03, 0.03);
-    kids.push(E.path(smoothD(s.pts, true), { fill: ramp(tones, 0.2 + 0.08 * lf + j) }));
-    kids.push(E.path(smoothD(off(0.08, 0.9), true), { fill: ramp(tones, 0.2 + c * 0.2 + 0.1 * lf + j) }));
-    kids.push(E.path(smoothD(off(0.2, 0.7), true), { fill: ramp(tones, 0.2 + c * 0.38 + 0.12 * lf + j) }));
-    kids.push(E.path(smoothD(off(0.38, 0.4), true), { fill: ramp(tones, 0.2 + c * 0.6 + 0.14 * lf + j), opacity: 0.8 }));
+    kids.push(E.path(smoothD(s.pts, true), { fill: ramp(tones, 0.24 + 0.08 * lf + j) }));
+    kids.push(E.path(smoothD(off(0.12, 0.8), true), { fill: ramp(tones, 0.24 + c * 0.26 + 0.11 * lf + j) }));
+    kids.push(E.path(smoothD(off(0.36, 0.44), true), { fill: ramp(tones, 0.24 + c * 0.54 + 0.14 * lf + j), opacity: 0.85 }));
   }
   // Leaf dabs: bright on each clump's lit side, dark on its shadow side.
   const hi = buckets(), lo = buckets();
