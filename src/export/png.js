@@ -45,7 +45,8 @@ export function ihdr(width, height) {
 // rgba holds `rows` full-width rows (rows * w * 4 bytes). Rows use the Sub filter.
 export function createPngWriter(width, height) {
   if (!(width > 0 && height > 0 && width <= 0x7fffffff && height <= 0x7fffffff)) throw new Error('bad PNG size');
-  const parts = [PNG_SIGNATURE, ihdr(width, height)];
+  // sRGB (intent 0, perceptual) matches what canvas.toBlob writes, so tiled and single-canvas exports look the same.
+  const parts = [PNG_SIGNATURE, ihdr(width, height), pngChunk('sRGB', new Uint8Array([0]))];
   const cs = new CompressionStream('deflate');  // 'deflate' = zlib wrapper, which is what IDAT holds
   const writer = cs.writable.getWriter();
   const reader = cs.readable.getReader();

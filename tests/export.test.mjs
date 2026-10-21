@@ -82,9 +82,11 @@ function decodePng(buf) {
     const data = body.subarray(4);
     if (type === 'IHDR') ihdr = { width: data.readUInt32BE(0), height: data.readUInt32BE(4), depth: data[8], color: data[9], interlace: data[12] };
     if (type === 'IDAT') idat.push(data);
+    if (type === 'sRGB') ihdr.srgb = data[0];
     off += 12 + len;
   }
   assert.equal(types[0], 'IHDR');
+  assert.equal(types[1], 'sRGB');
   assert.equal(types.at(-1), 'IEND');
   const raw = zlib.inflateSync(Buffer.concat(idat));
   const stride = ihdr.width * 4;
@@ -113,7 +115,7 @@ test('streaming PNG encoder writes a valid PNG in bands', async () => {
   const blob = await png.finish();
   assert.equal(blob.type, 'image/png');
   const { ihdr, px } = decodePng(Buffer.from(await blob.arrayBuffer()));
-  assert.deepEqual(ihdr, { width: W, height: H, depth: 8, color: 6, interlace: 0 });
+  assert.deepEqual(ihdr, { width: W, height: H, depth: 8, color: 6, interlace: 0, srgb: 0 });
   assert.deepEqual(px, img);
 });
 

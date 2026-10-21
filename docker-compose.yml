@@ -12,6 +12,8 @@ services:
     volumes:
       - bms-data:/data
     restart: unless-stopped
+    # Tiny init as PID 1 so SIGTERM reaches the server and stop is fast.
+    init: true
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=4)"]
       interval: 30s
