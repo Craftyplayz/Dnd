@@ -1,0 +1,378 @@
+// Layout engine: exact stated distances, collision resolution, distance/sanity report.
+// Pure and deterministic. See docs/CONTRACT.md section 9. All distance math comes from geom.js.
+import { TYPES, normalizeScene, allElements, findElement } from '../schema.js';
+import { shapeOf, footprintOf, distanceFt, overlaps, gap, coreDistance, pointInPoly, boundsOf, DIRECTIONS } from '../core/geom.js';
+
+const CONSTRAINT_TOL = 0.05;   // report tolerance (contract 2.3)
+const SOLVE_TOL = 0.01;        // solver target
+const SPIRAL_STEP = 2.5;
+const SPIRAL_MAX = 30;
+const CELL = 5;
+const COVER_FT = 30;
+const COVER_MIN_PCT = 60;
+const COVER_TYPES = new Set(['tree', 'boulder', 'rock-cluster', 'wagon', 'building', 'ruined-wall', 'crate', 'tent']);
+
+const r1 = v => Math.round(v * 10) / 10;
+const r2 = v => Math.round(v * 100) / 100;
+const r3 = v => Math.round(v * 1000) / 1000;
+const def = el => TYPES[el.type] || {};
+const isObject = el => def(el).kind === 'object';
+const nameOf = el => el.name || el.id;
+const boxOfShape = s => {
+  const xs = s.pts.map(p => p[0]), ys = s.pts.map(p => p[1]);
+  return { minX: Math.min(...xs) - s.r, minY: Math.min(...ys) - s.r, maxX: Math.max(...xs) + s.r, maxY: Math.max(...ys) + s.r };
+};
+const boxesNear = (a, b, pad = 0) => a.minX - pad <= b.maxX && b.minX - pad <= a.maxX && a.minY - pad <= b.maxY && b.minY - pad <= a.maxY;
+const centerOf = el => { const b = boundsOf(el); return [(b.minX + b.maxX) / 2, (b.minY + b.maxY) / 2]; };
+const pointShape = (x, y) => ({ core: 'point', pts: [[x, y]], r: 0 });
+const moveTo = (el, x, y) => ({ ...el, position: { x, y } });
+
+// Collision relation (contract 4): at least one object, and one blocks the other's category.
+function blocks(a, b) {
+  if (!isObject(a) && !isObject(b)) return false;
+  const da = def(a), db = def(b);
+  return (da.blockedBy || []).includes(db.cat) || (db.blockedBy || []).includes(da.cat);
+}
+
+// Footprint cache keyed by element object; drop the entry whenever an element moves.
+function footprints() {
+  const cache = new Map();
+  const get = el => {
+    let v = cache.get(el);
+    if (!v) { const fp = footprintOf(el); v = { fp, box: boxOfShape(fp) }; cache.set(el, v); }
+    return v;
+  };
+  return { get, forget: el => cache.delete(el) };
+}
+
+const insideMap = (box, W, H, tol = 0.01) => box.minX >= -tol && box.minY >= -tol && box.maxX <= W + tol && box.maxY <= H + tol;
+
+// ---------------------------------------------------------------- fixing
+
+function clampToMap(scene, fps, moved) {
+  const W = scene.grid.widthFt, H = scene.grid.heightFt;
+  for (const el of scene.objects) {
+    if (el.locked) continue;
+    const { box } = fps.get(el);
+    const shift = (lo, hi, max) => (hi - lo > max ? max / 2 - (lo + hi) / 2 : lo < 0 ? -lo : hi > max ? max - hi : 0);
+    const dx = shift(box.minX, box.maxX, W), dy = shift(box.minY, box.maxY, H);
+    if (!dx && !dy) continue;
+    const from = { ...el.position };
+    el.position = { x: r3(el.position.x + dx), y: r3(el.position.y + dy) };
+    fps.forget(el);
+    moved.push({ id: el.id, from, to: { ...el.position }, reason: 'bounds' });
+  }
+}
+
+// Move b along the constraint direction until distanceFt(a, b) == ft (bisection on the move distance).
+// Picks the root nearest to the current position that keeps b on the stated side of a.
+function solveConstraint(scene, c, fps, moved) {
+  const A = findElement(scene, c.a)?.el, B = findElement(scene, c.b)?.el;
+  if (!A || !B || B.locked) return;
+  let d = DIRECTIONS[c.direction];
+  if (!d) {
+    const [ax, ay] = centerOf(A), [bx, by] = centerOf(B);
+    const len = Math.hypot(bx - ax, by - ay);
+    d = len > 1e-9 ? [(bx - ax) / len, (by - ay) / len] : [1, 0];
+  }
+  const { x: x0, y: y0 } = B.position;
+  const at = t => moveTo(B, x0 + d[0] * t, y0 + d[1] * t);
+  const f = t => distanceFt(A, at(t), c.measure) - c.ft;
+  if (Math.abs(f(0)) <= SOLVE_TOL) return;
+  const [ax, ay] = centerOf(A);
+  const rightSide = t => { const [bx, by] = centerOf(at(t)); return (bx - ax) * d[0] + (by - ay) * d[1] >= -1e-9; };
+  // Converge on the boundary and return its positive side, so ft = 0 ends touching rather than overlapping.
+  const bisect = (lo, hi) => {
+    const posLo = f(lo) > 0;
+    for (let i = 0; i < 60 && Math.abs(hi - lo) > 1e-7; i++) {
+      const mid = (lo + hi) / 2;
+      if ((f(mid) > 0) === posLo) lo = mid; else hi = mid;
+    }
+    return posLo ? lo : hi;
+  };
+  const step = 0.5;
+  const maxT = 2 * (scene.grid.widthFt + scene.grid.heightFt) + c.ft;
+  let fallback = null, found = null;
+  let fPrevPos = f(0), fPrevNeg = fPrevPos;
+  for (let k = 1; k * step <= maxT && found === null; k++) {
+    for (const sgn of [1, -1]) {
+      const t1 = sgn * k * step, t0 = sgn * (k - 1) * step;
+      const v1 = f(t1), v0 = sgn > 0 ? fPrevPos : fPrevNeg;
+      if (sgn > 0) fPrevPos = v1; else fPrevNeg = v1;
+      if ((v0 > 0) === (v1 > 0)) continue;
+      const t = bisect(t0, t1);
+      if (rightSide(t)) { found = t; break; }
+      if (fallback === null) fallback = t;
+    }
+  }
+  const t = found ?? fallback;
+  if (t === null) return;
+  const from = { ...B.position };
+  B.position = { x: r3(x0 + d[0] * t), y: r3(y0 + d[1] * t) };
+  if (Math.abs(distanceFt(A, B, c.measure) - c.ft) > SOLVE_TOL) {
+    B.position = { x: x0 + d[0] * t, y: y0 + d[1] * t }; // rounding broke it: keep the exact value
+  }
+  fps.forget(B);
+  moved.push({ id: B.id, from, to: { ...B.position }, reason: `constraint ${c.id}` });
+}
+
+const SPIRAL = (() => {
+  const out = [];
+  const n = SPIRAL_MAX / SPIRAL_STEP;
+  for (let i = -n; i <= n; i++) for (let j = -n; j <= n; j++) {
+    const dx = i * SPIRAL_STEP, dy = j * SPIRAL_STEP, dist = Math.hypot(dx, dy);
+    if (dist === 0 || dist > SPIRAL_MAX) continue;
+    // angle clockwise from north, so ties at equal distance resolve the same way everywhere
+    out.push({ dx, dy, dist, ang: (Math.atan2(dx, -dy) + 2 * Math.PI) % (2 * Math.PI) });
+  }
+  return out.sort((a, b) => a.dist - b.dist || a.ang - b.ang);
+})();
+
+function collidesWithAny(el, all, fps, self = el) {
+  const { fp, box } = fps.get(el);
+  for (const o of all) {
+    if (o === self || !blocks(el, o)) continue;
+    const other = fps.get(o);
+    if (boxesNear(box, other.box) && overlaps(fp, other.fp)) return true;
+  }
+  return false;
+}
+
+function resolveCollisions(scene, fps, moved) {
+  const W = scene.grid.widthFt, H = scene.grid.heightFt;
+  const pinned = new Set();
+  for (const c of scene.constraints) { pinned.add(c.a); pinned.add(c.b); }
+  const all = allElements(scene);
+  for (const el of all) if (el.locked || !isObject(el)) pinned.add(el.id);
+  // An object yields to pinned elements and to earlier objects; later ones yield to it when their turn comes.
+  const settled = all.filter(e => pinned.has(e.id));
+  for (const el of scene.objects) {
+    if (pinned.has(el.id) || !collidesWithAny(el, settled, fps)) { if (!pinned.has(el.id)) settled.push(el); continue; }
+    settled.push(el);
+    const { x, y } = el.position;
+    for (const s of SPIRAL) {
+      const cand = moveTo(el, x + s.dx, y + s.dy);
+      if (!insideMap(fps.get(cand).box, W, H)) { fps.forget(cand); continue; }
+      const hit = collidesWithAny(cand, all, fps, el);
+      fps.forget(cand);
+      if (hit) continue;
+      el.position = { ...cand.position };
+      fps.forget(el);
+      moved.push({ id: el.id, from: { x, y }, to: { ...el.position }, reason: 'collision' });
+      break;
+    }
+  }
+}
+
+// ---------------------------------------------------------------- report
+
+const DIR_WORD = d => (d === 'any' || !d ? 'from' : `${d} of`);
+
+function constraintItems(scene) {
+  return scene.constraints.map(c => {
+    const A = findElement(scene, c.a)?.el, B = findElement(scene, c.b)?.el;
+    if (!A || !B) return { level: 'error', kind: 'constraint', ids: [c.a, c.b], message: `Constraint ${c.id} refers to a missing element`, expectedFt: c.ft };
+    const actual = distanceFt(A, B, c.measure);
+    let level = Math.abs(actual - c.ft) <= CONSTRAINT_TOL ? 'ok' : 'error';
+    let message = `${nameOf(B)} is ${actual.toFixed(1)} ft ${DIR_WORD(c.direction)} ${nameOf(A)} (stated ${c.ft} ft)`;
+    const d = DIRECTIONS[c.direction];
+    if (level === 'ok' && d && !def(A).kind?.match(/path|region/) && !def(B).kind?.match(/path|region/)) {
+      const [ax, ay] = centerOf(A), [bx, by] = centerOf(B);
+      if ((bx - ax) * d[0] + (by - ay) * d[1] < -1e-6) { level = 'warn'; message += `, but it is not ${c.direction} of it`; }
+    }
+    return { level, kind: 'constraint', ids: [c.a, c.b], message, expectedFt: c.ft, actualFt: r2(actual) };
+  });
+}
+
+function pairItems(all, fps) {
+  const items = [];
+  for (let i = 0; i < all.length; i++) {
+    const A = all[i];
+    for (let j = i + 1; j < all.length; j++) {
+      const B = all[j];
+      if (!blocks(A, B)) continue;
+      const a = fps.get(A), b = fps.get(B);
+      const need = Math.max(def(A).minGapFt || 0, def(B).minGapFt || 0);
+      if (!boxesNear(a.box, b.box, need)) continue;
+      if (overlaps(a.fp, b.fp)) {
+        items.push({ level: 'error', kind: 'collision', ids: [A.id, B.id], message: `${nameOf(A)} overlaps ${nameOf(B)}` });
+      } else if (need > 0) {
+        const g = gap(a.fp, b.fp);
+        if (g < need - 0.01) {
+          items.push({ level: 'warn', kind: 'spacing', ids: [A.id, B.id], message: `${nameOf(A)} and ${nameOf(B)} are ${g.toFixed(1)} ft apart (want ${need} ft)`, expectedFt: need, actualFt: r2(g) });
+        }
+      }
+    }
+  }
+  return items;
+}
+
+function boundsAndSizeItems(scene, fps) {
+  const W = scene.grid.widthFt, H = scene.grid.heightFt, items = [];
+  for (const el of scene.objects) {
+    if (!insideMap(fps.get(el).box, W, H)) items.push({ level: 'error', kind: 'bounds', ids: [el.id], message: `${nameOf(el)} extends outside the ${W} x ${H} ft map` });
+    const s = def(el).sizeFt;
+    if (s) {
+      const fits = (w, h) => w >= s.min[0] - 1e-9 && h >= s.min[1] - 1e-9 && w <= s.max[0] + 1e-9 && h <= s.max[1] + 1e-9;
+      const { w, h } = el.size;
+      if (!fits(w, h) && !fits(h, w)) {
+        items.push({ level: 'warn', kind: 'size', ids: [el.id], message: `${nameOf(el)} is ${w} x ${h} ft; a ${el.type} is ${s.min.join(' x ')} to ${s.max.join(' x ')} ft (typical ${s.typical.join(' x ')})` });
+      }
+    }
+  }
+  for (const el of scene.paths) {
+    const wf = def(el).widthFt, w = el.params.width;
+    if (wf && (w < wf.min || w > wf.max)) {
+      items.push({ level: 'warn', kind: 'size', ids: [el.id], message: `${nameOf(el)} is ${w} ft wide; a ${el.type} is ${wf.min} to ${wf.max} ft (typical ${wf.typical})` });
+    }
+  }
+  return items;
+}
+
+function bridgeItems(scene, fps) {
+  const all = allElements(scene), items = [];
+  const water = all.filter(e => def(e).cat === 'water');
+  const bridges = scene.objects.filter(e => e.type === 'bridge');
+  for (const b of bridges) {
+    if (!water.some(w => overlaps(fps.get(b).fp, shapeOf(w)))) items.push({ level: 'warn', kind: 'bridge', ids: [b.id], message: `${nameOf(b)} does not cross any water` });
+  }
+  // shortcut: one bridge on both the road and the water passes every crossing of that pair; upgrade if roads cross a river twice.
+  for (const road of scene.paths.filter(e => e.type === 'road')) {
+    const rs = shapeOf(road);
+    for (const w of water) {
+      const ws = shapeOf(w);
+      if (!overlaps(rs, ws)) continue;
+      if (!bridges.some(b => overlaps(fps.get(b).fp, rs) && overlaps(fps.get(b).fp, ws))) {
+        items.push({ level: 'warn', kind: 'bridge', ids: [road.id, w.id], message: `${nameOf(road)} crosses ${nameOf(w)} with no bridge` });
+      }
+    }
+  }
+  return items;
+}
+
+// 5 ft cells; true = blocked. Line blockers block every cell they touch (centre within width/2 + half the
+// cell diagonal), so a thin fence cannot leak a diagonal gap; area blockers use the cell centre.
+function blockedGrid(scene, fps) {
+  const cols = Math.round(scene.grid.widthFt / CELL), rows = Math.round(scene.grid.heightFt / CELL);
+  const grid = Array.from({ length: rows }, () => new Array(cols).fill(false));
+  const touch = CELL * Math.SQRT1_2;
+  const forCells = (box, pad, fn) => {
+    const c0 = Math.max(0, Math.floor((box.minX - pad) / CELL)), c1 = Math.min(cols - 1, Math.floor((box.maxX + pad) / CELL));
+    const r0 = Math.max(0, Math.floor((box.minY - pad) / CELL)), r1_ = Math.min(rows - 1, Math.floor((box.maxY + pad) / CELL));
+    for (let r = r0; r <= r1_; r++) for (let c = c0; c <= c1; c++) fn(r, c, (c + 0.5) * CELL, (r + 0.5) * CELL);
+  };
+  const inside = (s, x, y) => (s.core === 'poly' && s.r === 0 ? pointInPoly([x, y], s.pts) : coreDistance(pointShape(x, y), s) < s.r);
+  const all = allElements(scene);
+  for (const el of all) {
+    const d = def(el), deep = el.params?.depth === 'deep';
+    if (d.cat !== 'water' || !deep) continue;
+    const s = shapeOf(el);
+    if (d.kind === 'path') forCells(boxOfShape(s), touch, (r, c, x, y) => { if (coreDistance(pointShape(x, y), s) <= s.r + touch) grid[r][c] = true; });
+    else forCells(boxOfShape(s), 0, (r, c, x, y) => { if (inside(s, x, y)) grid[r][c] = true; });
+  }
+  for (const b of scene.objects.filter(e => e.type === 'bridge')) {
+    const { fp, box } = fps.get(b);
+    forCells(box, CELL, (r, c, x, y) => { if (gap(pointShape(x, y), fp) <= CELL / 2) grid[r][c] = false; });
+  }
+  for (const el of all) {
+    const d = def(el);
+    if (d.cat === 'wall') {
+      const s = shapeOf(el);
+      forCells(boxOfShape(s), touch, (r, c, x, y) => { if (coreDistance(pointShape(x, y), s) <= s.r + touch) grid[r][c] = true; });
+    } else if (d.kind === 'object' && (d.cat === 'object' || d.cat === 'structure')) {
+      const { fp, box } = fps.get(el);
+      forCells(box, 0, (r, c, x, y) => { if (inside(fp, x, y)) grid[r][c] = true; });
+    }
+  }
+  return grid;
+}
+
+function hasRoute(grid, westEast) {
+  const rows = grid.length, cols = grid[0]?.length || 0;
+  if (!rows || !cols) return false;
+  const seen = grid.map(row => row.map(() => false));
+  const queue = [];
+  if (westEast) { for (let r = 0; r < rows; r++) if (!grid[r][0]) { seen[r][0] = true; queue.push([r, 0]); } }
+  else { for (let c = 0; c < cols; c++) if (!grid[0][c]) { seen[0][c] = true; queue.push([0, c]); } }
+  for (let q = 0; q < queue.length; q++) {
+    const [r, c] = queue[q];
+    if (westEast ? c === cols - 1 : r === rows - 1) return true;
+    for (const [nr, nc] of [[r - 1, c], [r + 1, c], [r, c - 1], [r, c + 1]]) {
+      if (nr < 0 || nc < 0 || nr >= rows || nc >= cols || seen[nr][nc] || grid[nr][nc]) continue;
+      seen[nr][nc] = true;
+      queue.push([nr, nc]);
+    }
+  }
+  return false;
+}
+
+function coverPct(scene, grid) {
+  const covers = allElements(scene).filter(e => COVER_TYPES.has(e.type)).map(e => { const s = shapeOf(e); return { s, box: boxOfShape(s) }; });
+  let open = 0, covered = 0;
+  grid.forEach((row, r) => row.forEach((blocked, c) => {
+    if (blocked) return;
+    open++;
+    const x = (c + 0.5) * CELL, y = (r + 0.5) * CELL, p = pointShape(x, y), pb = { minX: x, minY: y, maxX: x, maxY: y };
+    if (covers.some(cv => boxesNear(pb, cv.box, COVER_FT) && gap(p, cv.s) <= COVER_FT)) covered++;
+  }));
+  return open ? r1((100 * covered) / open) : 0;
+}
+
+function buildReport(scene, fps, moved) {
+  const all = allElements(scene);
+  const items = [...constraintItems(scene), ...pairItems(all, fps), ...boundsAndSizeItems(scene, fps), ...bridgeItems(scene, fps)];
+  const grid = blockedGrid(scene, fps);
+  const lanes = { westEast: hasRoute(grid, true), northSouth: hasRoute(grid, false) };
+  items.push(lanes.westEast
+    ? { level: 'ok', kind: 'lane', ids: [], message: 'A 5 ft route crosses the map west to east' }
+    : { level: 'warn', kind: 'lane', ids: [], message: 'No 5 ft wide route crosses the map west to east' });
+  items.push(lanes.northSouth
+    ? { level: 'ok', kind: 'lane', ids: [], message: 'A 5 ft route crosses the map north to south' }
+    : { level: 'warn', kind: 'lane', ids: [], message: 'No 5 ft wide route crosses the map north to south' });
+  const pct = coverPct(scene, grid);
+  items.push({ level: pct < COVER_MIN_PCT ? 'warn' : 'ok', kind: 'cover', ids: [], message: `${pct}% of open ground is within ${COVER_FT} ft of cover` + (pct < COVER_MIN_PCT ? ` (aim for ${COVER_MIN_PCT}%)` : '') });
+  return { ok: !items.some(i => i.level === 'error'), items, moved, stats: { elements: all.length, coverPct: pct, lanes } };
+}
+
+// ---------------------------------------------------------------- API
+
+export function layoutScene(input, { fix = true } = {}) {
+  const scene = normalizeScene(input);
+  const fps = footprints();
+  const moved = [];
+  if (fix) {
+    clampToMap(scene, fps, moved);
+    for (const c of scene.constraints) solveConstraint(scene, c, fps, moved);
+    resolveCollisions(scene, fps, moved);
+  }
+  return { scene, report: buildReport(scene, fps, moved) };
+}
+
+export function checkScene(scene) {
+  return layoutScene(scene, { fix: false }).report;
+}
+
+export function neighbours(scene, ids, radiusFt = 40) {
+  const want = new Set(ids);
+  const all = allElements(scene);
+  const targets = all.filter(e => want.has(e.id)).map(e => ({ el: e, box: boundsOf(e) }));
+  return all.filter(e => !want.has(e.id) && targets.some(t => boxesNear(t.box, boundsOf(e), radiusFt) && distanceFt(t.el, e, 'edge') <= radiusFt));
+}
+
+export function summarizeScene(scene) {
+  const all = allElements(scene);
+  const counts = {};
+  for (const e of all) counts[e.type] = (counts[e.type] || 0) + 1;
+  return {
+    name: scene.meta?.name,
+    widthFt: scene.grid.widthFt,
+    heightFt: scene.grid.heightFt,
+    terrain: scene.terrain,
+    lighting: scene.lighting,
+    counts,
+    elements: all.slice(0, 400).map(e => ({
+      id: e.id, type: e.type, name: e.name,
+      x: r1(e.position.x), y: r1(e.position.y), w: r1(e.size?.w ?? 0), h: r1(e.size?.h ?? 0), rotation: r1(e.rotation || 0),
+    })),
+  };
+}
