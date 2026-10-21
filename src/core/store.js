@@ -43,6 +43,17 @@ export function createStore(initialScene, bus) {
       emit('reset', label, null);
       return { ok: true, errors: [] };
     },
+    // Merge fields into meta without an undo step (library id and timestamps after a save).
+    // Applied to every history entry too, so undo never resurrects the old id.
+    setMeta(partial) {
+      const res = checkScene({ ...current.scene, meta: { ...current.scene.meta, ...partial } });
+      if (!res.ok) return { ok: false, errors: res.errors };
+      current = { ...current, scene: res.scene };
+      const merge = h => ({ ...h, scene: { ...h.scene, meta: { ...h.scene.meta, ...partial } } });
+      past = past.map(merge); future = future.map(merge);
+      emit('meta', 'meta', null);
+      return { ok: true, errors: [] };
+    },
     undo() {
       if (!past.length) return false;
       future.push(current);

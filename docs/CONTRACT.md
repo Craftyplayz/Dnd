@@ -223,13 +223,13 @@ Root (`""`) cannot be targeted. Moving an element between collections = `remove`
 
 ## 8. Store, bus, editor
 
-`createStore(scene, bus)`: `get()`, `commit(ops, {label, source})`, `set(scene, {label, source})` (whole-scene replace, undoable), `reset(scene, {label})` (clears history), `undo()`, `redo()`, `canUndo()`, `canRedo()`, `history()`. All return `{ok, errors}` (undo/redo return bool). Treat `get()` as immutable.
+`createStore(scene, bus)`: `get()`, `commit(ops, {label, source})`, `setMeta(partialMeta)` (no undo step; applied to all history entries), `set(scene, {label, source})` (whole-scene replace, undoable), `reset(scene, {label})` (clears history), `undo()`, `redo()`, `canUndo()`, `canRedo()`, `history()`. All return `{ok, errors}` (undo/redo return bool). Treat `get()` as immutable.
 
 Bus events (payloads exact):
 
 | Event | Payload | Emitted by |
 |---|---|---|
-| `scene:changed` | `{scene, source: 'edit'|'ai'|'drag'|'delete'|'set'|'reset'|'undo'|'redo'|'generate'|'layout', label, ops|null}` | store |
+| `scene:changed` | `{scene, source: 'edit'|'ai'|'drag'|'delete'|'set'|'reset'|'undo'|'redo'|'generate'|'layout'|'meta', label, ops|null}` | store |
 | `selection:changed` | `{ids: string[]}` | editor |
 | `view:changed` | `{x, y, w, h, zoom}` | renderer |
 | `layers:changed` | `{visible: {name: bool}}` | editor (after calling `view.setLayerVisibility`) |

@@ -104,3 +104,13 @@ test('store: commit validates, undo/redo restore', () => {
   assert.equal(findElement(store.get(), 'campfire').el.params.lit, true);
   assert.deepEqual(events, ['edit', 'undo', 'redo']);
 });
+
+test('store.setMeta changes meta without history and survives undo', () => {
+  const store = createStore(load('riverside-ruin'), createBus());
+  store.commit([{ op: 'replace', path: '/objects/campfire/params/lit', value: true }]);
+  assert.equal(store.setMeta({ id: 'my-copy', name: 'My copy' }).ok, true);
+  assert.equal(store.history().past.length, 1);
+  store.undo();
+  assert.equal(store.get().meta.id, 'my-copy');
+  assert.equal(store.setMeta({ id: 'Bad Id' }).ok, false);
+});
