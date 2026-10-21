@@ -113,7 +113,7 @@ Fills, never overwrites: `constraints/regions/paths/objects/labels` → `[]`; `s
 
 JSON Schema keywords implemented (everything else is ignored): `type` (string or list; `integer` = finite whole number; **booleans are not numbers** — in Python check `bool` before `int`), `enum`, `const`, `properties`, `required`, `additionalProperties` (bool or schema), `items` (single schema), `minItems`, `maxItems`, `minimum`, `maximum`, `minLength`, `maxLength`, `pattern` (search semantics as written; patterns are anchored), `$ref` (`#/...` only). `default`, `description`, `title` and `x-*` are annotations.
 
-Semantic checks after the schema pass: grid sizes multiples of 5; ids unique across elements and constraints; `type` known and in the right collection; layer allowed; params valid against the type schema; regions ≥ 3 points; element `position` inside the map (inclusive); constraint `a`/`b` exist and differ.
+Semantic checks after the schema pass: grid sizes multiples of 5; ids unique across elements and constraints; `type` known and in the right collection; layer allowed; params valid against the type schema; regions ≥ 3 points; object and label `position` inside the map (inclusive; a path or region `position` is only the origin of its points and may lie outside); constraint `a`/`b` exist and differ.
 
 Never accept `NaN`/`Infinity` (Python: `json.loads(..., parse_constant=reject)`).
 

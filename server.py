@@ -342,7 +342,8 @@ def validate_scene(scene):
         if d['kind'] == 'region' and isinstance(pts, list) and len(pts) < 3:
             err(f'{p}/params/points', 'region needs at least 3 points')
         x, y = el['position']['x'], el['position']['y']
-        if x < 0 or y < 0 or x > W or y > H:
+        # Paths and regions: position is only the origin of their points, so it may sit outside the map.
+        if d['kind'] in ('object', 'label') and (x < 0 or y < 0 or x > W or y > H):
             err(f'{p}/position', f'position ({x}, {y}) is outside the {W}x{H} ft map')
     for i, c in enumerate(scene['constraints']):
         p = f'/constraints/{i}'

@@ -181,7 +181,8 @@ export function validateScene(scene) {
     validateAgainst(def.params, el.params, `${p}/params`, SCHEMA, errors);
     if (def.kind === 'region' && Array.isArray(el.params.points) && el.params.points.length < 3) err(`${p}/params/points`, 'region needs at least 3 points');
     const { x, y } = el.position;
-    if (x < 0 || y < 0 || x > W || y > H) err(`${p}/position`, `position (${x}, ${y}) is outside the ${W}x${H} ft map`);
+    // Paths and regions: position is only the origin of their points, so it may sit outside the map.
+    if ((def.kind === 'object' || def.kind === 'label') && (x < 0 || y < 0 || x > W || y > H)) err(`${p}/position`, `position (${x}, ${y}) is outside the ${W}x${H} ft map`);
   }
   for (const [i, c] of scene.constraints.entries()) {
     const p = `/constraints/${i}`;

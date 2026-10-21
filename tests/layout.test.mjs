@@ -211,3 +211,12 @@ test('the example scene in prompts/generate.md is valid and satisfies its constr
   assert.equal(kinds(r, 'constraint')[0].level, 'ok');
   assert.equal(kinds(r, 'bridge').length, 0);
 });
+
+test('moving a path b west keeps the scene valid (QA D1)', () => {
+  const s = validate(load('riverside-ruin')).scene;
+  findElement(s, 'watchtower').el.position.x -= 1; // stream must now move 1 ft west, origin goes negative
+  const { scene } = layoutScene(s, { fix: true });
+  const res = validate(scene);
+  assert.ok(res.ok, JSON.stringify(res.errors));
+  assert.ok(Math.abs(distanceFt(findElement(scene, 'watchtower').el, findElement(scene, 'stream').el) - 30) <= 0.05);
+});

@@ -32,7 +32,10 @@
     {"name":"change terrain","base":"riverside-ruin","ops":[{"op":"replace","path":"/terrain/base","value":"snow"}],"patch":"ok","valid":true},
     {"name":"label text too long","base":"riverside-ruin","ops":[{"op":"replace","path":"/labels/label-tower/params/text","value":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}],"patch":"ok","valid":false},
     {"name":"door item wrong","base":"riverside-ruin","ops":[{"op":"replace","path":"/objects/watchtower/params/doors/0/side","value":"up"}],"patch":"ok","valid":false},
-    {"name":"escaped token","base":"riverside-ruin","ops":[{"op":"add","path":"/objects/campfire/params/a~1b","value":1}],"patch":"ok","valid":true}
+    {"name":"escaped token","base":"riverside-ruin","ops":[{"op":"add","path":"/objects/campfire/params/a~1b","value":1}],"patch":"ok","valid":true},
+    {"name":"path origin west of map (layout moved it)","base":"riverside-ruin","ops":[{"op":"replace","path":"/paths/stream/position","value":{"x":-0.996,"y":0}}],"patch":"ok","valid":true},
+    {"name":"region origin north of map","base":"riverside-ruin","ops":[{"op":"replace","path":"/regions/bank/position","value":{"x":0,"y":-3}}],"patch":"ok","valid":true},
+    {"name":"label outside map","base":"riverside-ruin","ops":[{"op":"replace","path":"/labels/label-tower/position","value":{"x":-1,"y":5}}],"patch":"ok","valid":false}
   ],
   "hash32": [
     {"input":"","output":2166136261},
