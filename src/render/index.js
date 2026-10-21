@@ -84,6 +84,10 @@ export function renderElement(el, ctx, interactive = false) {
 }
 export { elTransform };
 
+export function mapClip(doc, id, W, H) {
+  return h('clipPath', { id, clipPathUnits: 'userSpaceOnUse' }, [h('rect', { x: 0, y: 0, width: W, height: H }, [], doc)], doc);
+}
+
 export function resolveLayers(scene, opts = {}) {
   const vis = { ...DEFAULT_LAYERS, ...(opts.layers || {}) };
   vis.grid = vis.grid && (opts.grid ?? scene.grid?.visible ?? true);
@@ -102,15 +106,20 @@ export function renderScene(scene, opts = {}) {
   svg.setAttributeNS('http://www.w3.org/2000/xmlns/', 'xmlns', SVG_NS);
   const defs = buildDefs(doc);
   svg.appendChild(defs);
+  // Every map layer is clipped to the map rect so verges, canopies and blur never spill past the border.
+  const clipId = `map-clip-${W}x${H}`;
+  defs.appendChild(mapClip(doc, clipId, W, H));
   const ctx = makeCtx(doc, scene, defs);
   const buckets = Object.fromEntries(ELEMENT_LAYERS.map(l => [l, []]));
   for (const { el } of iterElements(scene)) (buckets[el.layer] || buckets.objects).push(el);
   for (const name of LAYER_ORDER) {
     if (!vis[name]) continue;
-    if (name === 'terrain') svg.appendChild(renderTerrain(scene, ctx));
-    else if (name === 'lighting') svg.appendChild(renderLighting(scene, doc));
-    else if (name === 'grid') svg.appendChild(renderGrid(scene, doc));
-    else svg.appendChild(h('g', { 'data-layer': name }, buckets[name].map(el => renderElement(el, ctx, !!opts.interactive)), doc));
+    const g = name === 'terrain' ? renderTerrain(scene, ctx)
+      : name === 'lighting' ? renderLighting(scene, doc)
+      : name === 'grid' ? renderGrid(scene, doc)
+      : h('g', { 'data-layer': name }, buckets[name].map(el => renderElement(el, ctx, !!opts.interactive)), doc);
+    g.setAttribute('clip-path', `url(#${clipId})`);
+    svg.appendChild(g);
   }
   return svg;
 }

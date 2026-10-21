@@ -4,7 +4,7 @@ import { iterElements } from '../schema.js';
 import { buildDefs } from './defs.js';
 import { renderTerrain } from './terrain.js';
 import { renderLighting, renderGrid, litFires } from './lighting.js';
-import { LAYER_ORDER, ELEMENT_LAYERS, DEFAULT_LAYERS, makeCtx, renderElement, elTransform } from './index.js';
+import { LAYER_ORDER, ELEMENT_LAYERS, DEFAULT_LAYERS, makeCtx, renderElement, elTransform, mapClip } from './index.js';
 
 const ZMIN = 1, ZMAX = 200;
 const clampZ = z => Math.max(ZMIN, Math.min(ZMAX, z));
@@ -19,8 +19,11 @@ export function mountView(container, bus) {
   const registry = new Map();
   const groups = {};
   svg.appendChild(defs);
+  // Map-rect clip shared by all map layers (not the overlay); its rect follows the scene size.
+  const clip = mapClip(doc, 'map-clip-view', 1, 1);
+  defs.appendChild(clip);
   for (const name of LAYER_ORDER) {
-    const g = h('g', { 'data-layer': name, 'pointer-events': ELEMENT_LAYERS.includes(name) ? null : 'none' }, [], doc);
+    const g = h('g', { 'data-layer': name, 'pointer-events': ELEMENT_LAYERS.includes(name) ? null : 'none', 'clip-path': 'url(#map-clip-view)' }, [], doc);
     groups[name] = g;
     svg.appendChild(g);
   }
@@ -78,6 +81,8 @@ export function mountView(container, bus) {
     scene = next;
     const ctx = makeCtx(doc, scene, defs, registry);
     const W = scene.grid.widthFt, H = scene.grid.heightFt;
+    clip.firstChild.setAttribute('width', String(W));
+    clip.firstChild.setAttribute('height', String(H));
     const tk = JSON.stringify([scene.terrain, W, H, scene.seed]);
     if (tk !== keys.terrain) { keys.terrain = tk; replaceKids(groups.terrain, renderTerrain(scene, ctx)); }
     const lk = JSON.stringify([scene.lighting, litFires(scene), W, H]);
