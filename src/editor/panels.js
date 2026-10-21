@@ -160,6 +160,7 @@ function propertiesPanel(ctx) {
     ];
     for (const [k, s] of Object.entries(def.params?.properties || {})) {
       if (k === 'points') { list.push(['Points', {}, `${el.params.points.length} points`, null, true]); continue; }
+      if (s.type === 'array') { list.push([k.replace(/^./, m => m.toUpperCase()), {}, describeList(k, el.params[k]), null, true]); continue; }
       list.push([k.replace(/([A-Z])/g, ' $1').replace(/^./, m => m.toUpperCase()), s, el.params[k], c(`params/${k}`, `Change ${k}`)]);
     }
     list.push(['Notes', { type: 'string', maxLength: 500 }, el.notes || '', c('notes', 'Notes')]);
@@ -206,6 +207,13 @@ function usagePanel({ bus, api }) {
   bus.on('usage:updated', ({ usage }) => show(usage));
   Promise.resolve().then(() => api.usage?.()).then(u => show(u?.usage || u)).catch(() => { /* shown once a request reports usage */ });
   return panel('Usage', text, meter, cost);
+}
+
+// Array params (e.g. doors) are shown read-only; change them by describing the edit.
+function describeList(key, items = []) {
+  if (key !== 'doors') return `${items.length} items`;
+  const door = d => d.side.toUpperCase() + (d.offsetFt ? ` ${d.offsetFt > 0 ? '+' : ''}${d.offsetFt} ft` : '');
+  return items.map(door).join(', ') || 'none';
 }
 
 // ---------- Scenes ----------
