@@ -37,11 +37,42 @@ export function mountView(container, bus) {
   const cache = new Map(); // id -> { key, node, transform }
 
   const size = () => ({ w: container.clientWidth || 1, h: container.clientHeight || 1 });
+  // vp is the live viewport (what the user sees). The SVG content is only re-laid-out at commit():
+  // during a pan/zoom gesture we move the already-rasterised, composited <svg> with a CSS transform,
+  // and commit the real viewBox once the gesture has been idle for IDLE_MS.
+  // The svg is larger than the container by OVER px on each side so short pans reveal real content.
+  const IDLE_MS = 100;
+  let committed = null, over = 0, idleTimer = 0;
+  svg.style.willChange = 'transform';
+  // Screen position of the container's padding box (where map x = vp.x sits).
+  const origin = () => { const r = container.getBoundingClientRect(); return [r.left + container.clientLeft, r.top + container.clientTop]; };
   const getViewport = () => { const s = size(); return { x: vp.x, y: vp.y, w: s.w / vp.zoom, h: s.h / vp.zoom, zoom: vp.zoom }; };
-  function apply(emit = true) {
-    const v = getViewport();
-    svg.setAttribute('viewBox', `${fmt(v.x)} ${fmt(v.y)} ${fmt(v.w)} ${fmt(v.h)}`);
-    if (emit) bus?.emit('view:changed', v);
+  function commit() {
+    clearTimeout(idleTimer); idleTimer = 0;
+    const s = size();
+    over = Math.round(Math.max(s.w, s.h) * 0.25);
+    committed = { ...vp, w: s.w, h: s.h, over };
+    const z = vp.zoom;
+    Object.assign(svg.style, { inset: 'auto', left: `${-over}px`, top: `${-over}px`, width: `${s.w + 2 * over}px`, height: `${s.h + 2 * over}px`, transform: '', transformOrigin: `${over}px ${over}px` });
+    svg.setAttribute('viewBox', `${fmt(vp.x - over / z)} ${fmt(vp.y - over / z)} ${fmt((s.w + 2 * over) / z)} ${fmt((s.h + 2 * over) / z)}`);
+  }
+  // Live viewport still inside the rendered (committed) area?
+  function covered() {
+    const c = committed, s = size();
+    if (!c || c.w !== s.w || c.h !== s.h) return false;
+    const r = vp.zoom / c.zoom;
+    if (r < 0.6 || r > 3) return false; // keep scaled bitmaps from getting too blurry / too small
+    const x0 = c.x - c.over / c.zoom, y0 = c.y - c.over / c.zoom, x1 = x0 + (c.w + 2 * c.over) / c.zoom, y1 = y0 + (c.h + 2 * c.over) / c.zoom;
+    return vp.x >= x0 && vp.y >= y0 && vp.x + s.w / vp.zoom <= x1 && vp.y + s.h / vp.zoom <= y1;
+  }
+  function apply(emit = true, gesture = false) {
+    if (gesture && covered()) {
+      const c = committed, k = vp.zoom / c.zoom;
+      svg.style.transform = `translate(${fmt((c.x - vp.x) * vp.zoom)}px, ${fmt((c.y - vp.y) * vp.zoom)}px) scale(${k})`;
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(commit, IDLE_MS);
+    } else commit();
+    if (emit) bus?.emit('view:changed', getViewport());
   }
   function fit() {
     if (!scene) return;
@@ -57,13 +88,13 @@ export function mountView(container, bus) {
     apply();
   }
   function zoomAt(cx, cy, zoom) {
-    const r = svg.getBoundingClientRect();
-    const fx = vp.x + (cx - r.left) / vp.zoom, fy = vp.y + (cy - r.top) / vp.zoom;
+    const [ox, oy] = origin();
+    const fx = vp.x + (cx - ox) / vp.zoom, fy = vp.y + (cy - oy) / vp.zoom;
     vp.zoom = clampZ(zoom);
-    vp.x = fx - (cx - r.left) / vp.zoom;
-    vp.y = fy - (cy - r.top) / vp.zoom;
+    vp.x = fx - (cx - ox) / vp.zoom;
+    vp.y = fy - (cy - oy) / vp.zoom;
     userMoved = true;
-    apply();
+    apply(true, true);
   }
 
   function replaceKids(g, fresh) {
@@ -150,7 +181,7 @@ export function mountView(container, bus) {
     vp.x = pan.x - (e.clientX - pan.sx) / vp.zoom;
     vp.y = pan.y - (e.clientY - pan.sy) / vp.zoom;
     userMoved = true;
-    apply();
+    apply(true, true);
   }, { capture: true });
   const end = e => {
     if (!pan || e.pointerId !== pan.id) return;
@@ -186,8 +217,8 @@ export function mountView(container, bus) {
     svg, overlay, setScene, fit, getViewport, setViewport,
     setLayerVisibility(name, visible) { if (name in vis) { vis[name] = !!visible; applyVisibility(); } },
     getLayerVisibility: () => ({ ...vis }),
-    screenToFt(cx, cy) { const r = svg.getBoundingClientRect(); return { x: vp.x + (cx - r.left) / vp.zoom, y: vp.y + (cy - r.top) / vp.zoom }; },
-    ftToScreen(x, y) { const r = svg.getBoundingClientRect(); return { x: r.left + (x - vp.x) * vp.zoom, y: r.top + (y - vp.y) * vp.zoom }; },
+    screenToFt(cx, cy) { const [ox, oy] = origin(); return { x: vp.x + (cx - ox) / vp.zoom, y: vp.y + (cy - oy) / vp.zoom }; },
+    ftToScreen(x, y) { const [ox, oy] = origin(); return { x: ox + (x - vp.x) * vp.zoom, y: oy + (y - vp.y) * vp.zoom }; },
     elementIdAt(cx, cy) {
       for (const e of doc.elementsFromPoint(cx, cy)) {
         if (!svg.contains(e) || overlay.contains(e)) continue;
